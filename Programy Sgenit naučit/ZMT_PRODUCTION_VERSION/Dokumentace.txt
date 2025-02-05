@@ -1,0 +1,62 @@
+Kr.text
+Doplnit titutlek
+
+Titulek
+Zakládání výrobní verze jak bez kusovníku tak s kusovníkem.
+
+Použití
+Načítání dat výrobních verzí materiálů.
+
+Zobrazení dat v přehledném ALV gridu.
+
+Vytváření nových výrobních verzí s nebo bez kusovníku.
+
+Aktualizace a obnova zobrazených dat.
+
+Výběr
+Vytváření Nových Výrobních Verzí
+
+Vyberte řádky v ALV gridu, které chcete použít pro vytvoření nové
+
+výrobní verze.
+
+Radio buttony umožňují vytvářet požadované úkony:
+
+Vytvořit výrobní verze s kusovníkem
+
+Vytvořit výrobní verze bez kusovníku
+
+Zobrazit výrobní verze k materiálu
+
+Standardní varianty
+
+
+ = Úspěšně vytvořeno nebo viz popisek
+
+
+
+ = upozornění nebo viz popisek
+
+
+
+ = chyba nebo viz popisek
+
+Obnova Zobrazených Dat:
+
+Klikněte na tlačítko Refresh na toolbaru pro obnovení
+
+a aktualizaci dat v ALV gridu.
+
+Program znovu načte a zobrazí aktuální stav dat.
+
+Poznámky:
+
+Výběrové Parametry: Umožňují filtrovat data načítaná z databáze podle
+
+různých kritérií
+
+Rady a Doporučení
+
+Před spuštěním programu se ujistěte, že máte správně nastavené
+
+výběrové parametry

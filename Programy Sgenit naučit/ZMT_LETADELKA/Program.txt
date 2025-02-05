@@ -1,0 +1,778 @@
+*&---------------------------------------------------------------------*
+*& Report  Z1SF_ALV
+*&
+*&---------------------------------------------------------------------*
+*&
+*& Autor: Ing. Tomáš Linka (Pregis, a.s.)
+*&---------------------------------------------------------------------*
+
+REPORT z1sf_alv_edit.
+
+*&---------------------------------------------------------------------*
+TABLES: sflight.
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*  Definice
+*&---------------------------------------------------------------------*
+DATA: gt_sflight TYPE TABLE OF zsflight,
+      gs_variant TYPE          disvariant.
+
+*&---------------------------------------------------------------------*
+*  Vyberova obrazovka
+*&---------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME.
+  SELECT-OPTIONS: s_carrid FOR  sflight-carrid OBLIGATORY,
+*                  NO INTERVALS NO-EXTENSION,
+                  s_connid FOR  sflight-connid.
+  PARAMETERS:     p_edit   TYPE flag.
+SELECTION-SCREEN END OF BLOCK b01.
+
+SELECTION-SCREEN SKIP.
+
+* Vyber varianty zobrazeni
+SELECTION-SCREEN BEGIN OF BLOCK b05 WITH FRAME TITLE TEXT-001.
+  PARAMETERS:     p_varnt LIKE disvariant-variant.
+SELECTION-SCREEN END OF BLOCK b05.
+
+*-----------------------------------------------------------------------
+INITIALIZATION.
+*-----------------------------------------------------------------------
+  CLEAR gs_variant.
+  gs_variant-report  = sy-repid.
+
+  CALL FUNCTION 'REUSE_ALV_VARIANT_DEFAULT_GET'
+    EXPORTING
+      i_save     = 'A'
+    CHANGING
+      cs_variant = gs_variant
+    EXCEPTIONS
+      not_found  = 2.
+
+  IF sy-subrc = 0.
+    p_varnt = gs_variant-variant.
+  ENDIF.
+
+*-----------------------------------------------------------------------
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_varnt.
+*-----------------------------------------------------------------------
+  PERFORM f4_for_variant.
+
+*-----------------------------------------------------------------------
+AT SELECTION-SCREEN ON s_carrid.
+*-----------------------------------------------------------------------
+
+*-----------------------------------------------------------------------
+START-OF-SELECTION.
+*-----------------------------------------------------------------------
+
+*&---------------------------------------------------------------------*
+*  Nacteni dat dle vyberove obrazovky
+*&---------------------------------------------------------------------*
+  SELECT * FROM sflight
+    INTO CORRESPONDING FIELDS OF TABLE gt_sflight
+    WHERE carrid IN s_carrid
+      AND connid IN s_connid.
+
+  PERFORM count_price TABLES gt_sflight.
+
+*&---------------------------------------------------------------------*
+*  Volání obrazovky pro zobrazení dat
+*&---------------------------------------------------------------------*
+  CALL SCREEN 0100.
+
+END-OF-SELECTION.
+
+*&---------------------------------------------------------------------*
+* definice tridy pro zpracovani udalosti
+*&---------------------------------------------------------------------*
+CLASS lcl_event_receiver DEFINITION.
+  PUBLIC SECTION.
+    METHODS:
+*----------------------------------------------------------------------*
+* Osetreni zmeny dat u editovatelného ALV
+      handle_data_changed
+        FOR EVENT data_changed OF cl_gui_alv_grid
+        IMPORTING er_data_changed e_onf4 e_onf4_before e_onf4_after e_ucomm,
+*----------------------------------------------------------------------*
+* Spousti se po zmene dat
+      handle_data_changed_finished
+        FOR EVENT data_changed_finished OF cl_gui_alv_grid
+        IMPORTING e_modified,
+*----------------------------------------------------------------------*
+* Pridani tlacitek na toolbar
+      handle_toolbar
+        FOR EVENT toolbar OF cl_gui_alv_grid
+        IMPORTING e_object e_interactive,
+*----------------------------------------------------------------------*
+* Osetreni novych tlacitek na toolbaru
+      handle_user_command
+        FOR EVENT user_command OF cl_gui_alv_grid
+        IMPORTING e_ucomm ,
+*----------------------------------------------------------------------*
+* Subtotal
+      subtotal_text
+        FOR EVENT subtotal_text OF cl_gui_alv_grid
+        IMPORTING es_subtottxt_info ep_subtot_line e_event_data ,
+*----------------------------------------------------------------------*
+* Osetreni dvoukliku
+      handle_double_click
+        FOR EVENT double_click OF cl_gui_alv_grid
+        IMPORTING e_row e_column es_row_no.
+ENDCLASS.                    "lcl_event_receiver DEFINITION
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+* implementace zpracovani udalosti
+*&---------------------------------------------------------------------*
+CLASS lcl_event_receiver IMPLEMENTATION.
+
+  METHOD handle_data_changed.
+    PERFORM handle_data_chnaged USING er_data_changed e_onf4 e_onf4_before e_onf4_after e_ucomm.
+    PERFORM set_editability TABLES gt_sflight.
+  ENDMETHOD.                    "handle_data_changed
+
+  METHOD handle_data_changed_finished.
+    PERFORM refresh.
+  ENDMETHOD.                    "handle_data_changed_finished
+
+*--Handle Toolbar
+  METHOD handle_toolbar.
+    PERFORM handle_toolbar USING e_object e_interactive.
+  ENDMETHOD .                    "handle_toolbar
+
+*--Handle User Command
+  METHOD handle_user_command.
+    PERFORM handle_user_command USING e_ucomm.
+  ENDMETHOD.                    "handle_user_command
+
+*--Subtotal
+  METHOD subtotal_text.
+    PERFORM subtotal_text USING es_subtottxt_info ep_subtot_line e_event_data.
+  ENDMETHOD.                    "handle_user_command
+
+  METHOD handle_double_click.
+    IF e_row-index CO '0123456789 '.
+*      PERFORM handle_double_click USING e_row e_column es_row_no.
+    ENDIF.
+  ENDMETHOD.                    "lcl_event_handler
+
+ENDCLASS.                    "lcl_event_receiver IMPLEMENTATION
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0100  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0100 OUTPUT.
+*&---------------------------------------------------------------------*
+*  Menu a nadpis
+*&---------------------------------------------------------------------*
+  SET PF-STATUS 'STATUS_0100'.
+  SET TITLEBAR  'SCREEN_0100'.
+
+*&---------------------------------------------------------------------*
+*  Definice
+*&---------------------------------------------------------------------*
+  DATA: go_custom_container TYPE REF TO   cl_gui_custom_container,
+        gv_container        TYPE          scrfname VALUE 'ALV_GRID',
+        go_grid             TYPE REF TO   cl_gui_alv_grid,
+        go_event_receiver   TYPE REF TO   lcl_event_receiver,
+        gt_fieldcat         TYPE          lvc_t_fcat,
+        gs_layout           TYPE          lvc_s_layo,
+        gt_exclude          TYPE TABLE OF ui_func.
+
+  IF go_custom_container IS INITIAL.
+*&---------------------------------------------------------------------*
+* Vytvoreni objektu pro AVL s rozdelenim
+*&---------------------------------------------------------------------*
+    CREATE OBJECT go_custom_container
+      EXPORTING
+        container_name = gv_container.
+    CREATE OBJECT go_grid
+      EXPORTING
+        i_parent = go_custom_container.
+
+*&---------------------------------------------------------------------*
+* Vytvoreni a uprava field catalogu
+*&---------------------------------------------------------------------*
+    REFRESH: gt_fieldcat.
+
+    CALL FUNCTION 'LVC_FIELDCATALOG_MERGE'
+      EXPORTING
+        i_structure_name       = 'ZSFLIGHT'
+      CHANGING
+        ct_fieldcat            = gt_fieldcat[]
+      EXCEPTIONS
+        inconsistent_interface = 1
+        program_error          = 2
+        OTHERS                 = 3.
+
+*&---------------------------------------------------------------------*
+* Znepristupneni poli
+*&---------------------------------------------------------------------*
+    PERFORM set_visibility TABLES gt_fieldcat.
+
+*&---------------------------------------------------------------------*
+* Odebrani jednotlivych tlacitek
+*&---------------------------------------------------------------------*
+    PERFORM exclude TABLES gt_exclude.
+
+*&---------------------------------------------------------------------*
+* Zmena layoutu
+*&---------------------------------------------------------------------*
+    PERFORM layo_change USING gs_layout gs_variant.
+
+*&---------------------------------------------------------------------*
+* Vypis dat z tabulky lt_data do ALV
+*&---------------------------------------------------------------------*
+    CALL METHOD go_grid->set_table_for_first_display
+      EXPORTING
+        is_variant           = gs_variant
+        is_layout            = gs_layout
+        i_save               = 'A'
+        it_toolbar_excluding = gt_exclude
+      CHANGING
+        it_outtab            = gt_sflight
+        it_fieldcatalog      = gt_fieldcat.
+
+*&---------------------------------------------------------------------*
+* Pripojeni zpracovani udalosti k ALV
+*&---------------------------------------------------------------------*
+    CREATE OBJECT go_event_receiver.
+    SET HANDLER go_event_receiver->handle_data_changed          FOR go_grid.
+    SET HANDLER go_event_receiver->handle_data_changed_finished FOR go_grid.
+    SET HANDLER go_event_receiver->handle_toolbar               FOR go_grid.
+    SET HANDLER go_event_receiver->handle_user_command          FOR go_grid.
+    SET HANDLER go_event_receiver->handle_double_click          FOR go_grid.
+    SET HANDLER go_event_receiver->subtotal_text                FOR go_grid.
+
+    CALL METHOD go_grid->register_edit_event
+      EXPORTING
+        i_event_id = cl_gui_alv_grid=>mc_evt_modified
+      EXCEPTIONS
+        error      = 1
+        OTHERS     = 2.
+
+*&---------------------------------------------------------------------*
+* Umozni pouziti vlastnich tlacitek
+*&---------------------------------------------------------------------*
+    CALL METHOD go_grid->set_toolbar_interactive.
+
+*&---------------------------------------------------------------------*
+* Nastavi focus
+*&---------------------------------------------------------------------*
+    CALL METHOD go_grid->set_focus
+      EXPORTING
+        control = go_grid.
+  ELSE.
+    PERFORM refresh.
+  ENDIF.
+
+
+ENDMODULE.                 " STATUS_0100  OUTPUT
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0100 INPUT.
+  CASE sy-ucomm.
+    WHEN 'BACK'.
+      SET SCREEN 0. LEAVE SCREEN.
+    WHEN 'EXIT'.
+      SET SCREEN 0. LEAVE SCREEN.
+    WHEN 'CANC'.
+      SET SCREEN 0. LEAVE SCREEN.
+  ENDCASE.
+ENDMODULE.                 " USER_COMMAND_0100  INPUT
+
+*&---------------------------------------------------------------------*
+*&      Form  handle_toolbar
+*&---------------------------------------------------------------------*
+*       Pridani tlacitek
+*----------------------------------------------------------------------*
+FORM handle_toolbar USING i_object      TYPE REF TO cl_alv_event_toolbar_set
+                          i_interactive TYPE        char01.
+
+  DATA: ls_toolbar TYPE stb_button.
+
+  IF p_edit EQ 'X'.
+    CLEAR ls_toolbar.
+
+    MOVE 3 TO ls_toolbar-butn_type.
+    APPEND ls_toolbar TO i_object->mt_toolbar.
+
+    CLEAR ls_toolbar.
+
+    MOVE 'FILL' TO ls_toolbar-function.
+    MOVE icon_select_all TO ls_toolbar-icon.
+    MOVE TEXT-000 TO ls_toolbar-quickinfo. "Označení všech...
+    MOVE ' ' TO ls_toolbar-disabled.
+    APPEND ls_toolbar TO i_object->mt_toolbar.
+
+    CLEAR ls_toolbar.
+
+    MOVE 'CLEA' TO ls_toolbar-function.
+    MOVE icon_deselect_all TO ls_toolbar-icon.
+    MOVE TEXT-001 TO ls_toolbar-quickinfo. "Výmaz označených...
+    MOVE ' ' TO ls_toolbar-disabled.
+    APPEND ls_toolbar TO i_object->mt_toolbar.
+
+    CLEAR ls_toolbar.
+  ENDIF.
+
+ENDFORM .                    "handle_toolbar
+
+*&---------------------------------------------------------------------*
+*&      Form  handle_user_command
+*&---------------------------------------------------------------------*
+*       osetreni novych tlacitek na toolbaru
+*----------------------------------------------------------------------*
+FORM handle_user_command USING i_ucomm TYPE syucomm.
+  DATA: lr_sflight TYPE REF TO zsflight.
+
+  CASE i_ucomm.
+    WHEN 'FILL'.
+      LOOP AT gt_sflight REFERENCE INTO lr_sflight.
+        lr_sflight->selected = 'X'.
+      ENDLOOP.
+      PERFORM refresh.
+    WHEN 'CLEA'.
+      LOOP AT gt_sflight REFERENCE INTO lr_sflight.
+        lr_sflight->selected = space.
+      ENDLOOP.
+      PERFORM refresh.
+  ENDCASE.
+
+* propise zmeny zpet do interni tabulky
+  CALL METHOD go_grid->check_changed_data.
+
+ENDFORM.                    "handle_user_command
+
+*&---------------------------------------------------------------------*
+*&      Form  refresh
+*&---------------------------------------------------------------------*
+*       refresh pro o/odoznačení řádků
+*----------------------------------------------------------------------*
+FORM refresh.
+  DATA: ls_stable TYPE lvc_s_stbl,
+        ls1       TYPE lvc_t_ceno,
+        ls2       TYPE lvc_t_cell.
+
+  ls_stable-row = 'X'.
+  ls_stable-col = 'X'.
+
+  CALL METHOD go_grid->refresh_table_display
+    EXPORTING
+      is_stable = ls_stable.
+
+  CALL METHOD go_grid->get_selected_cells_id
+    IMPORTING
+      et_cells = ls1.    " Cell IDs
+
+  CALL METHOD go_grid->get_selected_cells
+    IMPORTING
+      et_cell = ls2.    " Selected Cells
+ENDFORM.                    "refresh
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_VISIBILITY
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM set_visibility TABLES et_fieldcat LIKE gt_fieldcat.
+  DATA: lr_sflight TYPE REF TO zsflight.
+
+  DATA: lr_fieldcat TYPE REF TO lvc_s_fcat.
+
+* vylouceni sloupcu
+  LOOP AT et_fieldcat REFERENCE INTO lr_fieldcat
+    WHERE fieldname EQ 'SEATSMAX_B'
+       OR fieldname EQ 'SEATSOCC_B'
+       OR fieldname EQ 'SEATSMAX_F'
+       OR fieldname EQ 'SEATSOCC_F'.
+    DELETE et_fieldcat INDEX sy-tabix.
+  ENDLOOP.
+
+* zaskrtavaci tlacitko
+  LOOP AT et_fieldcat REFERENCE INTO lr_fieldcat
+    WHERE fieldname EQ 'SELECTED'.
+    IF p_edit EQ 'X'.
+      lr_fieldcat->edit      = 'X'.
+      lr_fieldcat->checkbox  = 'X'.
+*      lr_fieldcat->reptext   = ''.
+*      lr_fieldcat->scrtext_s = ''.
+*      lr_fieldcat->scrtext_m = ''.
+*      lr_fieldcat->scrtext_l = ''.
+      lr_fieldcat->ref_table = ''.
+      lr_fieldcat->coltext   = 'Označ'.
+    ELSE.
+      DELETE et_fieldcat INDEX sy-tabix.
+    ENDIF.
+  ENDLOOP.
+
+* editovatelne sloupce
+  IF p_edit EQ 'X'.
+    LOOP AT et_fieldcat REFERENCE INTO lr_fieldcat
+      WHERE fieldname EQ 'PRICE'
+         OR fieldname EQ 'CURRENCY'
+         OR fieldname EQ 'SEATSOCC'
+         OR fieldname EQ 'PAYMENTSUM'.
+      lr_fieldcat->edit      = 'X'.
+    ENDLOOP.
+  ENDIF.
+ENDFORM.                    " SET_VISIBILITY
+
+*&---------------------------------------------------------------------*
+*&      Form  EXCLUDE
+*&---------------------------------------------------------------------*
+*  Odebrani tlacitek
+*----------------------------------------------------------------------*
+FORM exclude TABLES et_exclude LIKE gt_exclude.
+  DATA: ls_exclude TYPE ui_func.
+
+  ls_exclude = cl_gui_alv_grid=>mc_fc_views .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_info .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_graph .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_print .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_find .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_detail .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_check .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_refresh .
+  APPEND ls_exclude TO et_exclude.
+*  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_delete_row .
+*  APPEND ls_exclude TO et_exclude.
+*  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_insert_row .
+*  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy_row .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_cut .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_undo .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste_new_row .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_append_row .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy .
+  APPEND ls_exclude TO et_exclude.
+  ls_exclude = cl_gui_alv_grid=>mc_mb_export .
+  APPEND ls_exclude TO et_exclude.
+
+ENDFORM.                    " EXCLUDE
+
+*&---------------------------------------------------------------------*
+*&      Form  LAYO_CHANGE
+*&---------------------------------------------------------------------*
+*  Uprava layoutu
+*----------------------------------------------------------------------*
+FORM layo_change USING es_layout  TYPE lvc_s_layo
+                       es_variant TYPE disvariant.
+
+* nadpis
+  es_layout-grid_title = 'Seznam letů'.
+* optimalizace sirky sloupce
+  es_layout-cwidth_opt = 'X'.
+* pruhovaný výpis
+  es_layout-zebra      = 'X'.
+* nastaveni vyberu
+  es_layout-sel_mode   = 'A'.
+*  es_layout-no_rowmark = 'X'.
+  es_layout-stylefname = 'CELLSTYLES'.
+  es_layout-ctab_fname = 'CELLCOLOR'.
+  es_variant-report    = sy-repid. " bez tohohle nejde ukladat layout
+
+ENDFORM.                    " LAYO_CHANGE
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_EDITABILITY
+*&---------------------------------------------------------------------*
+*  Nastaveni editovatelnosti konkretnich poli
+*----------------------------------------------------------------------*
+FORM set_editability TABLES et_sflight LIKE gt_sflight.
+*  DATA: lr_sflight TYPE REF TO zsflight.
+*
+*  DATA: lt_style    TYPE        lvc_t_styl,
+*        ls_style    TYPE        lvc_s_styl,
+*        lt_color    TYPE        lvc_t_scol,
+*        ls_color    TYPE        lvc_s_scol,
+*        lr_fieldcat TYPE REF TO lvc_s_fcat.
+*
+*  LOOP AT et_sflight REFERENCE INTO lr_sflight.
+*    CLEAR lr_sflight->cellstyles.
+*    REFRESH lt_style.
+*
+*    LOOP AT gt_fieldcat REFERENCE INTO lr_fieldcat
+*      WHERE fieldname EQ 'PLANETYPE'
+*         OR fieldname EQ 'SEATSMAX'.
+**    nastaveni editovatelnosti
+*      CLEAR: ls_style.
+*      ls_style-fieldname = lr_fieldcat->fieldname .
+*      IF lr_sflight->selected EQ 'X'.
+*        ls_style-style = cl_gui_alv_grid=>mc_style_enabled.
+*      ELSE.
+*        ls_style-style = cl_gui_alv_grid=>mc_style_disabled.
+*      ENDIF.
+*      INSERT ls_style INTO TABLE lt_style .
+*
+*      IF lr_fieldcat->fieldname EQ 'PLANETYPE'.
+**    nastaveni barvy
+*        CLEAR: ls_color.
+*        ls_color-fname = lr_fieldcat->fieldname.
+**      CALL METHOD er_data_changed->get_cell_value
+**        EXPORTING
+**          i_row_id    = lr_modcels->row_id
+**          i_fieldname = 'SELECTED'
+**        IMPORTING
+**          e_value     = lv_component.
+*
+*        IF lr_sflight->selected EQ 'X'.
+*          ls_color-color-col = 7.
+*          ls_color-color-int = 1.
+*
+*          INSERT ls_color INTO TABLE lt_color .
+*          lr_sflight->cellcolor  = lt_color[].
+*        ELSE.
+*          CLEAR: lr_sflight->cellcolor[].
+*        ENDIF.
+*      ENDIF.
+*    ENDLOOP.
+*    lr_sflight->cellstyles = lt_style[].
+*  ENDLOOP.
+ENDFORM.                    " SET_EDITABILITY
+
+*&---------------------------------------------------------------------*
+*&      Form  f4_for_variant
+*&---------------------------------------------------------------------*
+*       Vyber varianty
+*----------------------------------------------------------------------*
+FORM f4_for_variant.
+  DATA: lv_exit TYPE c.
+
+  CALL FUNCTION 'REUSE_ALV_VARIANT_F4'
+    EXPORTING
+      is_variant = gs_variant
+      i_save     = 'A'
+    IMPORTING
+      e_exit     = lv_exit
+      es_variant = gs_variant
+    EXCEPTIONS
+      not_found  = 2.
+
+  IF sy-subrc = 2.
+    MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSE.
+    IF lv_exit EQ space.
+      p_varnt = gs_variant-variant.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    "f4_for_variant
+
+*&---------------------------------------------------------------------*
+*&      Form  COUNT_PRICE
+*&---------------------------------------------------------------------*
+*  Vypocet ceny
+*----------------------------------------------------------------------*
+FORM count_price  TABLES et_sflight LIKE gt_sflight.
+  DATA: lr_sflight TYPE REF TO zsflight.
+
+  LOOP AT et_sflight REFERENCE INTO lr_sflight.
+    lr_sflight->paymentsum = lr_sflight->price * lr_sflight->seatsocc.
+  ENDLOOP.
+
+ENDFORM.                    " COUNT_PRICE
+
+*&---------------------------------------------------------------------*
+*&      Form  HANDLE_DATA_CHNAGED
+*&---------------------------------------------------------------------*
+*       slouzi pro prednastaveni hodnot pridane radky
+*----------------------------------------------------------------------*
+FORM handle_data_chnaged USING er_data_changed TYPE REF TO cl_alv_changed_data_protocol
+                               e_onf4          TYPE  char01
+                               e_onf4_before   TYPE  char01
+                               e_onf4_after    TYPE  char01
+                               e_ucomm         TYPE  sy-ucomm.
+
+  DATA: lr_fieldcatalog TYPE REF TO lvc_s_fcat,
+        lv_value        TYPE        lvc_value.
+
+  DATA: lr_sflight TYPE REF TO zsflight.
+
+  DATA: lt_stylerow TYPE        lvc_t_styl,
+        ls_stylerow TYPE        lvc_s_styl.
+
+  DATA: lv_price    TYPE s_price,
+        lv_selected TYPE flag.
+
+  DATA: lr_insrow  TYPE REF TO lvc_s_moce,
+        lr_delrows TYPE REF TO lvc_s_moce,
+        lr_modcels TYPE REF TO lvc_s_modi.
+
+  DATA: lt_style    TYPE        lvc_t_styl,
+        ls_style    TYPE        lvc_s_styl,
+        lt_color    TYPE        lvc_t_scol,
+        ls_color    TYPE        lvc_s_scol,
+        lr_fieldcat TYPE REF TO lvc_s_fcat.
+
+*        lv_pass_open     TYPE        fieb_decrypted_passwd,
+*        lv_pass          TYPE        fieb_encrypted_passwd,
+*        lv_password_open TYPE        string,
+*        lv_password      TYPE        string,
+*        lv_heslo         TYPE        bapipwd,
+*        lv_rc            TYPE        sysubrc.
+*----------------------------------------------------------------------*
+
+  SORT er_data_changed->mt_mod_cells BY row_id.
+
+  LOOP AT er_data_changed->mt_mod_cells REFERENCE INTO lr_modcels
+  WHERE fieldname EQ 'PRICE'.
+
+    CALL METHOD er_data_changed->get_cell_value
+      EXPORTING
+        i_row_id    = lr_modcels->row_id
+        i_fieldname = 'PRICE'
+      IMPORTING
+        e_value     = lv_value.
+
+    IF lv_value IS NOT INITIAL.
+      MOVE lv_value TO lv_price.
+
+      READ TABLE gt_sflight REFERENCE INTO lr_sflight INDEX lr_modcels->row_id.
+      IF sy-subrc EQ 0.
+        lr_sflight->paymentsum = lv_price * lr_sflight->seatsocc.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+
+
+  LOOP AT er_data_changed->mt_mod_cells REFERENCE INTO lr_modcels
+  WHERE fieldname EQ 'SELECTED'.
+
+    CALL METHOD er_data_changed->get_cell_value
+      EXPORTING
+        i_row_id    = lr_modcels->row_id
+        i_fieldname = 'SELECTED'
+      IMPORTING
+        e_value     = lv_value.
+
+    CLEAR: lv_selected.
+    MOVE lv_value TO lv_selected.
+
+    READ TABLE gt_sflight REFERENCE INTO lr_sflight INDEX lr_modcels->row_id.
+    IF sy-subrc EQ 0.
+      CLEAR: ls_color.
+      ls_color-fname = 'PLANETYPE'.
+      IF lv_selected EQ 'X'.
+        ls_color-color-col = 7.
+        ls_color-color-int = 1.
+
+        INSERT ls_color INTO TABLE lt_color .
+        lr_sflight->cellcolor  = lt_color[].
+      ELSE.
+        CLEAR: lr_sflight->cellcolor[].
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+  IF e_ucomm(6) NE '&SORT_'.
+* poznamena si zmenu
+*----------------------------------------------------------------------*
+* odstrani neopravnena chybova hlaseni
+*----------------------------------------------------------------------*
+    LOOP AT er_data_changed->mt_mod_cells REFERENCE INTO lr_modcels
+      WHERE error EQ 'X'
+        AND value IS INITIAL.
+      lr_modcels->error = ''.
+      CALL METHOD er_data_changed->refresh_protocol.
+    ENDLOOP.
+
+*----------------------------------------------------------------------*
+* Pridane radky
+*----------------------------------------------------------------------*
+    LOOP AT er_data_changed->mt_inserted_rows REFERENCE INTO lr_insrow.
+      READ TABLE gt_sflight REFERENCE INTO lr_sflight INDEX lr_insrow->row_id.
+      IF sy-subrc EQ 0.
+
+      ENDIF.
+    ENDLOOP.
+
+*----------------------------------------------------------------------*
+* Upravene radky
+*----------------------------------------------------------------------*
+    LOOP AT er_data_changed->mt_mod_cells REFERENCE INTO lr_modcels.
+      READ TABLE gt_sflight REFERENCE INTO lr_sflight INDEX lr_modcels->row_id.
+      IF sy-subrc EQ 0.
+
+      ENDIF.
+    ENDLOOP.
+
+*----------------------------------------------------------------------*
+* Vymazane radky
+*----------------------------------------------------------------------*
+    LOOP AT er_data_changed->mt_deleted_rows REFERENCE INTO lr_delrows.
+      READ TABLE gt_sflight REFERENCE INTO lr_sflight INDEX lr_delrows->row_id.
+      IF sy-subrc EQ 0.
+
+      ENDIF.
+    ENDLOOP.
+  ENDIF.
+
+*----------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+
+  LOOP AT gt_sflight REFERENCE INTO lr_sflight.
+    CLEAR lr_sflight->cellstyles.
+    REFRESH lt_style.
+
+    LOOP AT gt_fieldcat REFERENCE INTO lr_fieldcat
+      WHERE fieldname EQ 'PLANETYPE'
+         OR fieldname EQ 'SEATSMAX'.
+*    nastaveni editovatelnosti
+      CLEAR: ls_style.
+      ls_style-fieldname = lr_fieldcat->fieldname .
+      IF lr_sflight->selected EQ 'X'.
+        ls_style-style = cl_gui_alv_grid=>mc_style_enabled.
+      ELSE.
+        ls_style-style = cl_gui_alv_grid=>mc_style_disabled.
+      ENDIF.
+      INSERT ls_style INTO TABLE lt_style .
+    ENDLOOP.
+    lr_sflight->cellstyles = lt_style[].
+  ENDLOOP.
+
+ENDFORM.                    " HANDLE_DATA_CHNAGED
+
+*&---------------------------------------------------------------------*
+*&      Form  SUBTOTAL_TEXT
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*----------------------------------------------------------------------*
+FORM subtotal_text USING es_subtottxt_info TYPE        lvc_s_stxt
+                         ep_subtot_line    TYPE REF TO data
+                         e_event_data      TYPE REF TO
+                         cl_alv_event_data.
+
+  DATA ls_sflight TYPE sflight.
+  FIELD-SYMBOLS: <fs1> STRUCTURE sflight DEFAULT ls_sflight,
+                 <fs2>.
+
+  IF es_subtottxt_info-criteria = 'CARRID'.
+    ASSIGN ep_subtot_line->* TO <fs1>.
+    ASSIGN e_event_data->m_data->* TO <fs2>.
+    CONCATENATE es_subtottxt_info-keyword ': '
+                <fs1>-carrid INTO <fs2>.
+  ENDIF.
+
+ENDFORM.                    " SUBTOTAL_TEXT

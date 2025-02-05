@@ -1,0 +1,173 @@
+*&---------------------------------------------------------------------*
+*& Report ZMT_JOB
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmt_job.
+
+
+SELECTION-SCREEN BEGIN OF BLOCK bl1 WITH FRAME TITLE TEXT-003 .
+  PARAMETERS: i_udalos TYPE btceventid .
+SELECTION-SCREEN END OF BLOCK bl1 .
+SELECTION-SCREEN PUSHBUTTON 1(35) pb_event USER-COMMAND run_event.
+
+SELECTION-SCREEN BEGIN OF BLOCK bl2 WITH FRAME TITLE TEXT-004.
+  PARAMETERS: i_jobnam TYPE btcjob,
+              i_user   TYPE btcsdlnm.
+SELECTION-SCREEN END OF BLOCK bl2 .
+SELECTION-SCREEN PUSHBUTTON 1(35) pb_job USER-COMMAND show_job.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR i_udalos .
+  PERFORM f4_udalost .
+
+AT SELECTION-SCREEN .
+  CASE sy-ucomm .
+    WHEN 'RUN_EVENT' .
+      PERFORM run_event USING i_udalos.
+    WHEN 'SHOW_JOB' .
+      PERFORM show_job USING i_jobnam
+                             i_user .
+    WHEN 'ONLI' .
+      MESSAGE e010(ad) WITH TEXT-006 .
+*      call transaction 'SM37' .
+  ENDCASE.
+
+INITIALIZATION.
+  MOVE TEXT-001 TO pb_event.
+  MOVE TEXT-005 TO pb_job.
+
+*&---------------------------------------------------------------------*
+*&      Form  F4_UDALOST
+*&---------------------------------------------------------------------*
+
+FORM f4_udalost .
+  DATA: BEGIN OF eventid_hlp_tbl OCCURS 20.
+          INCLUDE STRUCTURE btcevthtbl.
+  DATA: END OF eventid_hlp_tbl.
+  DATA: fieldtbl LIKE dfies OCCURS 0 WITH HEADER LINE.
+
+  DATA: selected_eventid LIKE tbtcjob-eventid.
+
+  DATA: p_helpvalue_key TYPE ddshpvkey VALUE 'BTC_EVENTID_HELP'.
+
+  FREE eventid_hlp_tbl.
+
+  SELECT * FROM btcuev
+    INTO CORRESPONDING FIELDS OF TABLE eventid_hlp_tbl.
+
+
+  SELECT * FROM btcsev
+    APPENDING CORRESPONDING FIELDS OF TABLE eventid_hlp_tbl.
+
+  SORT eventid_hlp_tbl BY eventid ASCENDING.
+
+  FREE fieldtbl.
+  CLEAR fieldtbl.
+  REFRESH fieldtbl.
+
+  fieldtbl-tabname    = 'BTCEVTHTBL'.
+  fieldtbl-fieldname  = 'EVENTID'.
+  APPEND fieldtbl.
+
+  DATA: scrnfield TYPE help_info-dynprofld.
+  scrnfield = 'I_UDALOS' .
+
+
+  CALL FUNCTION 'F4IF_INT_TABLE_VALUE_REQUEST'
+    EXPORTING
+      retfield        = 'EVENTID'
+      pvalkey         = p_helpvalue_key
+      dynpprog        = 'SAPLBTCH'
+      dynpnr          = sy-dynnr
+      dynprofield     = scrnfield
+      value_org       = 'C'
+    TABLES
+      value_tab       = eventid_hlp_tbl
+      field_tab       = fieldtbl
+    EXCEPTIONS
+      parameter_error = 1
+      no_values_found = 2
+      OTHERS          = 3.
+ENDFORM.                    " F4_UDALOST
+*&---------------------------------------------------------------------*
+*&      Form  RUN_EVENT
+*&---------------------------------------------------------------------*
+
+FORM run_event  USING    i_udalos TYPE btceventid.
+
+  IF i_udalos = space .
+    MESSAGE e010(ad) WITH TEXT-002 .
+    EXIT.
+  ENDIF.
+
+  CALL FUNCTION 'BP_EVENT_RAISE'
+    EXPORTING
+      eventid                = i_udalos
+*     EVENTPARM              = ' '
+*     TARGET_INSTANCE        = ' '
+    EXCEPTIONS
+      bad_eventid            = 1
+      eventid_does_not_exist = 2
+      eventid_missing        = 3
+      raise_failed           = 4
+      OTHERS                 = 5.
+  IF sy-subrc <> 0.
+    .
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+
+ENDFORM.                    " RUN_EVENT
+*&---------------------------------------------------------------------*
+*&      Form  SHOW_JOB
+*&---------------------------------------------------------------------*
+
+FORM show_job  USING    p_i_jobnam TYPE btcjob
+                        p_i_user TYPE btcsdlnm .
+
+  DATA: ls_jobsel  TYPE  btcselect,
+        lt_joblist TYPE TABLE OF tbtcjob.
+
+  IF p_i_jobnam = space .
+    ls_jobsel-jobname = '*' .
+  ELSE.
+    ls_jobsel-jobname = p_i_jobnam .
+  ENDIF.
+  IF p_i_user = space .
+    ls_jobsel-username = '*' .
+  ELSE.
+    ls_jobsel-username = p_i_user .
+  ENDIF.
+  ls_jobsel-from_date = sy-datum .
+  ls_jobsel-to_date = sy-datum .
+  ls_jobsel-prelim = '' .
+  ls_jobsel-schedul = ' ' .
+  ls_jobsel-ready = 'X' .
+  ls_jobsel-running = 'X' .
+  ls_jobsel-finished = 'X' .
+  ls_jobsel-aborted = 'X' .
+
+  CALL FUNCTION 'BP_JOB_MANAGEMENT'
+    EXPORTING
+      jobselect_dialog        = 'N'
+      joblist_opcode          = '22'
+      jobsel_param_input      = ls_jobsel
+*     LIST_TITLE              =
+    TABLES
+      joblist                 = lt_joblist
+    EXCEPTIONS
+      unknown_selection_error = 1
+      invalid_opcode          = 2
+      invalid_dialog_type     = 3
+      refresh_list_required   = 4
+      empty_list              = 5
+      OTHERS                  = 6.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+
+  ENDIF.
+  CALL TRANSACTION 'SM37' .
+
+ENDFORM.                    " SHOW_JOB

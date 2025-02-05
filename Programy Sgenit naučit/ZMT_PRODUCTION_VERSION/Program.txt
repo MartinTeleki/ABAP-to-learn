@@ -1,0 +1,921 @@
+*&---------------------------------------------------------------------*
+*& Report ZMT_PROD_VERSION
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+* Created by Teleki Martin[Sgenit] 2.7.2024  RM82747
+*&---------------------------------------------------------------------*
+
+REPORT zmt_prod_version.
+
+*&---------------------------------------------------------------------*
+* Tables
+*&---------------------------------------------------------------------*
+TABLES : mast, mapl, mkal, stko, mara, marc, plko.
+TYPE-POOLS: slis, truxs, icon.
+INCLUDE bdcrecxy.
+
+*&---------------------------------------------------------------------*
+* Data declarations
+*&---------------------------------------------------------------------*
+DATA: gt_final TYPE TABLE OF zpp_prod_ver_output.
+* Layout selection
+DATA: gs_variant TYPE          disvariant.
+
+*&---------------------------------------------------------------------*
+* Selection screen
+*----------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-005.
+
+  SELECTION-SCREEN BEGIN OF BLOCK b6 WITH FRAME TITLE TEXT-006.
+    SELECT-OPTIONS: s_matnr FOR marc-matnr," DEFAULT space,
+                    s_werks FOR marc-werks NO INTERVALS NO-EXTENSION OBLIGATORY," DEFAULT '*' OBLIGATORY,
+                    s_dispo FOR marc-dispo.
+  SELECTION-SCREEN END OF BLOCK b6.
+
+  SELECTION-SCREEN BEGIN OF BLOCK b5 WITH FRAME TITLE TEXT-004.
+    PARAMETERS: p_text     TYPE vers_text DEFAULT TEXT-020,
+                p_prefi(3) TYPE c         DEFAULT 'V01',
+                p_adatu    TYPE adatm     DEFAULT sy-datum,
+                p_bdatu    TYPE bdatm     DEFAULT '99991231',
+                p_bstmi    TYPE bstmi     DEFAULT '1',
+                p_bstma    TYPE bstma     DEFAULT '99999999',
+                p_mksp     TYPE mksp      AS CHECKBOX.
+  SELECTION-SCREEN END OF BLOCK b5.
+
+  SELECTION-SCREEN BEGIN OF BLOCK b9 WITH FRAME TITLE TEXT-009.
+    PARAMETERS: p_no_bom RADIOBUTTON GROUP g2 DEFAULT 'X' USER-COMMAND cc,
+                p_view   RADIOBUTTON GROUP g2.
+  SELECTION-SCREEN END OF BLOCK b9.
+SELECTION-SCREEN END OF BLOCK b1.
+
+SELECTION-SCREEN BEGIN OF BLOCK b7 WITH FRAME TITLE TEXT-007.
+  SELECT-OPTIONS: s_plnty FOR mapl-plnty NO INTERVALS NO-EXTENSION
+                                         OBLIGATORY DEFAULT 'N' MODIF ID 004,
+                  s_plnnr FOR mapl-plnnr NO-DISPLAY,
+                  s_plnal FOR mapl-plnal MODIF ID 004,
+                  s_plnaw FOR mapl-plnal MODIF ID 002.
+SELECTION-SCREEN END OF BLOCK b7.
+
+SELECTION-SCREEN BEGIN OF BLOCK b8 WITH FRAME TITLE TEXT-008.
+  SELECT-OPTIONS: s_stlan FOR mast-stlan NO INTERVALS NO-EXTENSION
+                                         OBLIGATORY DEFAULT '1'
+                                         MODIF ID 001,
+
+                  s_stlnw FOR mast-stlan MODIF ID 002,
+                  s_stlty FOR stko-stlty NO INTERVALS NO-EXTENSION
+                                         NO-DISPLAY,
+                  s_stlnr FOR mast-stlnr NO-DISPLAY,
+                  s_stlal FOR mast-stlal MODIF ID 001,
+                  s_stlaw FOR mast-stlal MODIF ID 002.
+SELECTION-SCREEN END OF BLOCK b8.
+
+* layout selection
+SELECTION-SCREEN BEGIN OF BLOCK b05 WITH FRAME TITLE TEXT-b05.
+  PARAMETERS: p_varnt LIKE disvariant-variant.
+SELECTION-SCREEN END OF BLOCK b05.
+
+*-----------------------------------------------------------------------
+INITIALIZATION.
+*-----------------------------------------------------------------------
+  CLEAR gs_variant.
+  gs_variant-report = sy-repid.
+
+  CALL FUNCTION 'REUSE_ALV_VARIANT_DEFAULT_GET'
+    EXPORTING
+      i_save     = 'A'
+    CHANGING
+      cs_variant = gs_variant
+    EXCEPTIONS
+      not_found  = 2.
+
+  IF sy-subrc = 0.
+    p_varnt = gs_variant-variant.
+  ENDIF.
+
+
+
+*-----------------------------------------------------------------------
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_varnt.
+*-----------------------------------------------------------------------
+  DATA: lv_exit TYPE c.
+
+  CALL FUNCTION 'REUSE_ALV_VARIANT_F4'
+    EXPORTING
+      is_variant = gs_variant
+      i_save     = 'A'
+    IMPORTING
+      e_exit     = lv_exit
+      es_variant = gs_variant
+    EXCEPTIONS
+      not_found  = 2.
+
+  IF sy-subrc = 2.
+    MESSAGE ID sy-msgid TYPE 'S' NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ELSE.
+    IF lv_exit EQ space.
+      p_varnt = gs_variant-variant.
+    ENDIF.
+  ENDIF.
+
+*-----------------------------------------------------------------------
+START-OF-SELECTION.
+*-----------------------------------------------------------------------
+
+  IF p_no_bom EQ 'X'.
+    LOOP AT SCREEN.
+      IF screen-group1 = '001'.
+        screen-active = 1.
+      ENDIF.
+
+      IF screen-group1 = '002'.
+        screen-active = 0.
+      ENDIF.
+
+      IF screen-group1 = `004`.
+        screen-active = 1.
+      ENDIF.
+
+      MODIFY SCREEN.
+    ENDLOOP.
+
+  ELSEIF p_no_bom EQ 'X'.
+    LOOP AT SCREEN.
+      IF screen-group1 = '001'.
+        screen-active = 0.
+      ENDIF.
+
+      IF screen-group1 = '002'.
+        screen-active = 0.
+      ENDIF.
+
+      IF screen-group1 = `004`.
+        screen-active = 1.
+      ENDIF.
+
+      MODIFY SCREEN.
+    ENDLOOP.
+
+  ELSE.
+    LOOP AT SCREEN.
+      IF screen-group1 = '001'.
+        screen-active = 0.
+      ENDIF.
+
+      IF screen-group1 = '002'.
+        screen-active = 1.
+      ENDIF.
+
+      IF screen-group1 = `004`.
+        screen-active = 0.
+      ENDIF.
+
+      MODIFY SCREEN.
+    ENDLOOP.
+  ENDIF.
+
+* Pole s šedým výstupem
+  LOOP AT SCREEN.
+    IF screen-group1 = '003'.
+      screen-active = 0.
+    ENDIF.
+    MODIFY SCREEN.
+  ENDLOOP.
+
+*&---------------------------------------------------------------------*
+* Local class - declaration
+*&---------------------------------------------------------------------*
+CLASS lcl_app DEFINITION.
+  PUBLIC SECTION.
+    CLASS-METHODS
+      run.
+
+    METHODS:
+*----------------------------------------------------------------------*
+      read,
+      read_view,
+      refreash_data,
+*----------------------------------------------------------------------*
+      display,
+*&---------------------------------------------------------------------*
+      alv_refresh,
+      alv_create,
+*----------------------------------------------------------------------*
+      create_production_version,
+*----------------------------------------------------------------------*
+      handle_double_click FOR EVENT double_click OF cl_gui_alv_grid
+        IMPORTING e_row e_column es_row_no,
+
+*----------------------------------------------------------------------*
+      handle_toolbar FOR EVENT toolbar OF cl_gui_alv_grid
+        IMPORTING e_object e_interactive,
+*----------------------------------------------------------------------*
+      handle_user_command FOR EVENT user_command OF cl_gui_alv_grid
+        IMPORTING e_ucomm.
+
+  PRIVATE SECTION.
+    DATA: mo_alv              TYPE REF TO   cl_salv_table,
+          go_grid             TYPE REF TO   cl_gui_alv_grid,
+          go_custom_container TYPE REF TO   cl_gui_custom_container,
+          go_viewer           TYPE REF TO   cl_gui_chart_engine,
+          gt_selected_rows    TYPE          lvc_t_row.
+
+ENDCLASS.                    "lcl_app DEFINITION
+
+DATA: go_inst TYPE REF TO lcl_app.
+
+*&---------------------------------------------------------------------*
+* Local class - IMPLEMENTATION
+*&---------------------------------------------------------------------*
+CLASS lcl_app IMPLEMENTATION.
+  METHOD run.
+
+    IF p_varnt IS NOT INITIAL.
+      gs_variant-variant = p_varnt.
+    ENDIF.
+
+    IF p_view EQ 'X'.
+      s_plnal[] = s_plnaw[].
+      s_stlan[] = s_stlnw[].
+      s_stlal[] = s_stlaw[].
+    ENDIF.
+
+    CREATE OBJECT go_inst.
+    IF p_no_bom EQ 'X'.
+      go_inst->read( ).
+    ELSE.
+      go_inst->read_view( ).
+    ENDIF.
+    go_inst->display( ).
+  ENDMETHOD.                    "run
+
+  METHOD read.
+    DATA: lt_mast       TYPE TABLE OF mast,
+          lr_mast       TYPE REF TO   mast,
+          ls_mast       TYPE          mast,
+          lt_mapl       TYPE TABLE OF mapl,
+          lr_mapl       TYPE REF TO   mapl,
+          ls_mapl       TYPE          mapl,
+          lt_stko       TYPE TABLE OF stko,
+          lr_stko       TYPE REF TO   stko,
+          ls_stko       TYPE          stko,
+          lt_mara       TYPE TABLE OF mara,
+          ls_mara       TYPE          mara,
+          lt_marc       TYPE TABLE OF marc,
+          lr_marc       TYPE REF TO   marc,
+          lt_mkal       TYPE TABLE OF mkal,
+          lr_mkal       TYPE REF TO   mkal,
+          ls_mkal       TYPE          mkal,
+          ls_final      TYPE          zpp_prod_ver_output,
+          lr_final      TYPE REF TO   zpp_prod_ver_output,
+          lv_dispo      TYPE          dispo,
+          lv_index      TYPE          i,
+          lv_indec(2)   TYPE          c,
+          lv_last_matnr TYPE        matnr.
+
+    DATA: lt_plpo TYPE TABLE OF coplpo,
+          lt_plfh TYPE TABLE OF plfh.
+
+
+*Pokud zakládáme bez kusovníku
+************************************************************************
+    IF p_no_bom EQ 'X'.         "If i am creating it without BOMs
+
+      SELECT matnr werks dispo FROM marc
+        INTO CORRESPONDING FIELDS OF TABLE lt_marc
+        WHERE matnr IN s_matnr
+          AND werks IN s_werks
+          AND dispo IN s_dispo.
+
+      LOOP AT lt_marc REFERENCE INTO lr_marc.
+************************************************************************
+* Fix values
+        IF p_bstmi IS NOT INITIAL. "lot size from
+          ls_final-bstmi = p_bstmi.
+        ELSE.
+          ls_final-bstmi = '1'.
+        ENDIF.
+
+        IF p_bstma IS NOT INITIAL. "lot size to
+          ls_final-bstma = p_bstma.
+        ELSE.
+          ls_final-bstma = '999999'.
+        ENDIF.
+
+        IF p_adatu IS NOT INITIAL. "valid from production version
+          ls_final-adatu = p_adatu.
+        ELSE.
+          ls_final-adatu = sy-datum.
+        ENDIF.
+
+        IF p_bdatu IS NOT INITIAL. "valid to production version
+          ls_final-bdatu = p_bdatu.
+        ELSE.
+          ls_final-bdatu = '99991231'.
+        ENDIF.
+
+        IF p_text IS INITIAL.
+          p_text = TEXT-020.
+        ENDIF.
+
+************************************************************************
+
+************************************************************************
+* MARC values
+        ls_final-matnr = lr_marc->matnr.
+        ls_final-werks = lr_marc->werks.
+        ls_final-dispo = lr_marc->dispo.
+
+************************************************************************
+
+* Load task list
+        SELECT matnr werks plnty plnnr plnal
+               zkriz zaehl datuv loekz andat
+          FROM mapl
+          INTO CORRESPONDING FIELDS OF TABLE lt_mapl
+          WHERE matnr EQ lr_marc->matnr
+            AND werks EQ lr_marc->werks
+            AND plnty IN s_plnty
+            AND plnnr IN s_plnnr
+            AND plnal IN s_plnal
+            AND loekz EQ ' '.
+
+        IF lt_mapl[] IS NOT INITIAL.
+          LOOP AT lt_mapl REFERENCE INTO lr_mapl.
+************************************************************************
+* MAPL values
+            ls_final-plnnr = lr_mapl->plnnr.         " routing
+            ls_final-plnty = lr_mapl->plnty.         " task list type
+            ls_final-alnal = lr_mapl->plnal.         " group counter
+
+            CALL FUNCTION 'CP_EX_PLAN_READ'
+              EXPORTING
+                plnnr_imp     = lr_mapl->plnnr
+                plnty_imp     = lr_mapl->plnty
+                plnal_imp     = lr_mapl->plnal
+                sttag_imp     = sy-datum
+              TABLES
+                plpo_exp      = lt_plpo
+                plfh_exp      = lt_plfh
+              EXCEPTIONS
+                not_found     = 1
+                plnal_initial = 2
+                OTHERS        = 3.
+
+            IF sy-subrc NE 0.
+              CONTINUE.
+            ENDIF.
+
+************************************************************************
+* material text
+
+            SELECT SINGLE maktx FROM makt
+              INTO ls_final-maktx
+              WHERE matnr EQ ls_final-matnr
+                AND spras EQ sy-langu.
+
+            IF sy-subrc NE 0.
+              SELECT SINGLE maktx FROM makt
+                INTO ls_final-maktx
+                WHERE matnr EQ ls_final-matnr
+                  AND spras EQ 'E'.
+            ENDIF.
+
+************************************************************************
+            ls_final-text1 = p_text.
+            APPEND ls_final TO gt_final.
+          ENDLOOP.
+        ENDIF.
+      ENDLOOP.
+
+************************************************************************
+* Check existence
+      LOOP AT gt_final REFERENCE INTO lr_final.
+        lv_dispo = lr_final->dispo.
+
+        IF lt_mkal[] IS INITIAL.
+          SELECT * FROM mkal
+            INTO CORRESPONDING FIELDS OF TABLE lt_mkal
+            WHERE matnr EQ lr_final->matnr
+              AND werks EQ lr_final->werks
+              AND plnnr EQ lr_final->plnnr    "Klíč skupiny postupů
+              AND plnty EQ lr_final->plnty    "Čítač skupin
+              AND alnal EQ lr_final->alnal.   "Čítač skupin
+
+          "loading boms and adding to the gt_final
+          CLEAR lr_mkal.
+          LOOP AT lt_mkal REFERENCE INTO lr_mkal WHERE matnr = lr_final->matnr .
+            lr_final->stlan = lr_mkal->stlan.
+            lr_final->stlal = lr_mkal->stlal.
+          ENDLOOP.
+
+          "surfix for prefix
+          IF sy-subrc EQ 0.
+            IF lv_last_matnr NE lr_final->matnr.
+              lv_last_matnr = lr_final->matnr.
+              lv_index = 0.
+            ELSE.
+              lv_index = lv_index + 1.
+            ENDIF.
+            lv_indec = lv_index.
+            CONCATENATE p_prefi lv_indec INTO lr_final->verid.
+
+            " If is verid in mkal after changing data of production variant
+            SELECT * FROM mkal
+        INTO CORRESPONDING FIELDS OF TABLE lt_mkal
+        WHERE matnr EQ lr_final->matnr
+          AND werks EQ lr_final->werks
+          AND verid EQ lr_final->verid.
+
+            IF sy-subrc NE 0.
+              lr_final->icon        = icon_yellow_light.
+              lr_final->status_text = TEXT-093.
+            ELSE.
+              lr_final->icon        = icon_red_light.
+              lr_final->status_text = TEXT-101.
+            ENDIF.
+          ELSE.
+            IF lv_last_matnr NE lr_final->matnr.
+              lv_last_matnr = lr_final->matnr.
+              lv_index = 0.
+            ELSE.
+              lv_index = lv_index + 1.
+            ENDIF.
+            lv_indec = lv_index.
+            CONCATENATE p_prefi lv_indec INTO lr_final->verid.
+
+            SELECT * FROM mkal
+        INTO CORRESPONDING FIELDS OF TABLE lt_mkal
+        WHERE matnr EQ lr_final->matnr
+          AND werks EQ lr_final->werks
+          AND verid EQ lr_final->verid.
+
+            IF sy-subrc NE 0.
+              lr_final->icon        = icon_yellow_light.
+              lr_final->status_text = TEXT-093.
+            ELSE.
+              lr_final->icon        = icon_red_light.
+              lr_final->status_text = TEXT-101.
+            ENDIF.
+          ENDIF.
+        ELSE.
+
+          "loading boms and adding to the gt_final
+          CLEAR lr_mkal.
+
+          LOOP AT lt_mkal REFERENCE INTO lr_mkal WHERE matnr = lr_final->matnr .
+            lr_final->stlan = lr_mkal->stlan.
+            lr_final->stlal = lr_mkal->stlal.
+          ENDLOOP.
+
+          "surfix for prefix
+          IF sy-subrc EQ 0.
+            IF lv_last_matnr NE lr_final->matnr.
+              lv_last_matnr = lr_final->matnr.
+              lv_index = 0.
+            ELSE.
+              lv_index = lv_index + 1.
+            ENDIF.
+            lv_indec = lv_index.
+            CONCATENATE p_prefi lv_indec INTO lr_final->verid.
+
+            " If is verid in mkal after changing data of production variant
+            SELECT * FROM mkal
+        INTO CORRESPONDING FIELDS OF TABLE lt_mkal
+        WHERE matnr EQ lr_final->matnr
+          AND werks EQ lr_final->werks
+          AND verid EQ lr_final->verid.
+
+            IF sy-subrc NE 0.
+              lr_final->icon        = icon_yellow_light.
+              lr_final->status_text = TEXT-093.
+            ELSE.
+              lr_final->icon        = icon_red_light.
+              lr_final->status_text = TEXT-101.
+            ENDIF.
+          ELSE.
+            IF lv_last_matnr NE lr_final->matnr.
+              lv_last_matnr = lr_final->matnr.
+              lv_index = 0.
+            ELSE.
+              lv_index = lv_index + 1.
+            ENDIF.
+            lv_indec = lv_index.
+            CONCATENATE p_prefi lv_indec INTO lr_final->verid.
+
+            SELECT * FROM mkal
+        INTO CORRESPONDING FIELDS OF TABLE lt_mkal
+        WHERE matnr EQ lr_final->matnr
+          AND werks EQ lr_final->werks
+          AND verid EQ lr_final->verid.
+
+            IF sy-subrc NE 0.
+              lr_final->icon        = icon_yellow_light.
+              lr_final->status_text = TEXT-093.
+            ELSE.
+              lr_final->icon        = icon_red_light.
+              lr_final->status_text = TEXT-101.
+            ENDIF.
+
+          ENDIF.
+
+
+        ENDIF.
+        CLEAR: lv_dispo.
+      ENDLOOP.
+    ENDIF.                      "If i am creating it without BOMs
+  ENDMETHOD.                    "read
+
+  METHOD read_view.
+    DATA: lt_marc  TYPE TABLE OF marc,
+          lr_marc  TYPE REF TO   marc,
+          lt_mkal  TYPE TABLE OF mkal,
+          lr_mkal  TYPE REF TO   mkal,
+          ls_final TYPE          zpp_prod_ver_output.
+
+************************************************************************
+* Load materials
+************************************************************************
+
+    SELECT matnr werks dispo FROM marc
+      INTO CORRESPONDING FIELDS OF TABLE lt_marc
+      WHERE matnr IN s_matnr
+        AND werks IN s_werks
+        AND dispo IN s_dispo
+        AND lvorm =  space.
+
+    LOOP AT lt_marc REFERENCE INTO lr_marc.
+      SELECT * FROM mkal
+        INTO CORRESPONDING FIELDS OF TABLE lt_mkal
+        WHERE matnr EQ lr_marc->matnr
+          AND werks EQ lr_marc->werks
+          AND stlal IN s_stlal
+          AND stlan IN s_stlan
+          AND plnnr IN s_plnnr
+          AND plnty IN s_plnty
+          AND alnal IN s_plnal.
+
+      LOOP AT lt_mkal REFERENCE INTO lr_mkal.
+
+        MOVE-CORRESPONDING lr_mkal->* TO ls_final.
+        ls_final-dispo = lr_marc->dispo.
+
+* material text
+        SELECT SINGLE maktx FROM makt
+          INTO ls_final-maktx
+          WHERE matnr EQ ls_final-matnr
+            AND spras EQ sy-langu.
+
+        IF sy-subrc NE 0.
+          SELECT SINGLE maktx FROM makt
+            INTO ls_final-maktx
+            WHERE matnr EQ ls_final-matnr
+              AND spras EQ 'E'.
+        ENDIF.
+
+        APPEND ls_final TO gt_final.
+        CLEAR: ls_final.
+      ENDLOOP.
+    ENDLOOP.
+
+  ENDMETHOD.                    "read_view
+
+  METHOD refreash_data.
+
+    DATA: ls_mkal          TYPE          mkal,
+          lr_mkal          TYPE REF TO   mkal,
+          lr_final         TYPE REF TO   zpp_prod_ver_output,
+          lv_dispo         TYPE          dispo,
+          lr_selected_rows TYPE REF TO   lvc_s_row.
+
+
+    LOOP AT gt_selected_rows REFERENCE INTO lr_selected_rows.
+      READ TABLE gt_final REFERENCE INTO lr_final INDEX lr_selected_rows->index.
+      IF sy-subrc EQ 0.
+        IF   lr_final->icon EQ icon_green_light
+          OR lr_final->icon EQ icon_yellow_light.
+
+          lv_dispo = lr_final->dispo.
+
+          SELECT SINGLE * FROM mkal
+            INTO CORRESPONDING FIELDS OF ls_mkal
+            WHERE matnr EQ lr_final->matnr
+              AND werks EQ lr_final->werks
+              AND verid EQ lr_final->verid.
+
+          IF sy-subrc EQ 0.
+            MOVE-CORRESPONDING ls_mkal TO lr_final->*.
+            lr_final->icon        = icon_checked.
+            lr_final->status_text = TEXT-094.
+            lr_final->dispo       = lv_dispo.
+          ELSE.
+            lr_final->icon        = icon_failure.
+            lr_final->status_text = TEXT-095.
+          ENDIF.
+          CLEAR: lv_dispo.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    CLEAR: gt_selected_rows[].
+
+  ENDMETHOD.                    "refreash_data
+
+  METHOD create_production_version.
+
+    DATA: lt_mkal_i        TYPE TABLE OF mkal,
+          lr_mkal_i        TYPE REF TO   mkal,
+          lt_mkal_u        TYPE TABLE OF mkal,
+          lt_mkal_d        TYPE TABLE OF mkal,
+          it_mkal_aend     TYPE TABLE OF mkal_aend,
+          ls_mkal          TYPE          mkal,
+          lr_final         TYPE REF TO   zpp_prod_ver_output,
+          lr_selected_rows TYPE REF TO   lvc_s_row.
+
+    CLEAR: gt_selected_rows[].
+
+    CALL METHOD go_grid->get_selected_rows
+      IMPORTING
+        et_index_rows = gt_selected_rows.
+
+    IF gt_selected_rows[] IS INITIAL.
+      MESSAGE i010(ad) WITH TEXT-099.
+    ELSE.
+      LOOP AT gt_selected_rows REFERENCE INTO lr_selected_rows.
+        READ TABLE gt_final REFERENCE INTO lr_final INDEX lr_selected_rows->index.
+        IF sy-subrc EQ 0.
+          IF   lr_final->icon EQ icon_green_light
+            OR lr_final->icon EQ icon_yellow_light.
+            READ TABLE lt_mkal_i
+              WITH KEY matnr = lr_final->matnr
+                       plnnr = lr_final->plnnr
+              TRANSPORTING NO FIELDS.
+
+            IF sy-subrc NE 0.
+              MOVE-CORRESPONDING lr_final->* TO ls_mkal.
+              APPEND ls_mkal TO lt_mkal_i.
+              CLEAR: ls_mkal.
+              UPDATE marc SET verkz = 'X'
+                WHERE matnr EQ lr_final->matnr
+                  AND werks EQ lr_final->werks.
+            ENDIF.
+          ENDIF.
+        ENDIF.
+      ENDLOOP.
+
+*check existence
+
+      IF lt_mkal_i IS NOT INITIAL.
+        LOOP AT lt_mkal_i REFERENCE INTO lr_mkal_i.
+          SELECT single statu
+            FROM plko
+            INTO @DATA(ls_temporary_statu)
+            WHERE plnnr = @lr_mkal_i->plnnr.
+
+          IF ls_temporary_statu <> 4.
+            CLEAR ls_temporary_statu.
+            lr_mkal_i->mksp = 1.
+          ELSE.
+            CLEAR ls_temporary_statu.
+            lr_mkal_i->mksp = space.
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
+      CALL FUNCTION 'CM_FV_PROD_VERS_DB_UPDATE'
+        TABLES
+          it_mkal_i    = lt_mkal_i
+          it_mkal_u    = lt_mkal_u
+          it_mkal_d    = lt_mkal_d
+          it_mkal_aend = it_mkal_aend.
+
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'.
+    ENDIF.
+  ENDMETHOD.
+
+  METHOD display.
+    CALL SCREEN 0100.
+  ENDMETHOD.                    "display
+
+  METHOD alv_create.
+    DATA: lt_fcat     TYPE        lvc_t_fcat,
+          ls_layout   TYPE        lvc_s_layo,
+          lr_fieldcat TYPE REF TO lvc_s_fcat,
+          ls_exclude  TYPE        ui_func,
+          gt_exclude  TYPE        ui_functions.
+
+    IF go_custom_container IS INITIAL.
+      CREATE OBJECT go_custom_container
+        EXPORTING
+          container_name = 'ALV_GRID'.
+      CREATE OBJECT go_grid
+        EXPORTING
+          i_parent = go_custom_container.
+
+      CALL FUNCTION 'LVC_FIELDCATALOG_MERGE'
+        EXPORTING
+          i_structure_name       = 'ZPP_PROD_VER_OUTPUT'
+        CHANGING
+          ct_fieldcat            = lt_fcat
+        EXCEPTIONS
+          inconsistent_interface = 1
+          program_error          = 2
+          OTHERS                 = 3.
+
+      LOOP AT lt_fcat REFERENCE INTO lr_fieldcat.
+        CASE lr_fieldcat->fieldname.
+          WHEN 'ICON'.
+            IF p_no_bom EQ 'X'.
+              lr_fieldcat->icon = 'X'.
+              lr_fieldcat->coltext   = 'Status'(003).
+            ELSE.
+              CLEAR: lr_fieldcat->fieldname.
+            ENDIF.
+          WHEN 'STATUS_TEXT'.
+            IF p_view EQ 'X'.
+              CLEAR: lr_fieldcat->fieldname.
+            ENDIF.
+          WHEN 'VERID'.
+            IF p_no_bom EQ 'X'.
+              lr_fieldcat->edit = 'X'.
+            ELSE.
+              CLEAR: lr_fieldcat->fieldname.
+            ENDIF.
+        ENDCASE.
+      ENDLOOP.
+
+      DELETE lt_fcat WHERE fieldname IS INITIAL.
+
+      ls_exclude = cl_gui_alv_grid=>mc_fc_views.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_info.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_graph.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_print.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_check.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_refresh.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_delete_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_insert_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_cut.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_undo.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste_new_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_append_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy.
+      APPEND ls_exclude TO gt_exclude.
+
+      ls_layout-sel_mode   = 'A'.
+      ls_layout-zebra      = 'X'.
+      ls_layout-cwidth_opt = 'X'.
+      gs_variant-report    = sy-repid.
+      gs_variant-username  = sy-uname.
+
+      CALL METHOD go_grid->set_table_for_first_display
+        EXPORTING
+          is_variant                    = gs_variant
+          is_layout                     = ls_layout
+          i_save                        = 'A'
+          it_toolbar_excluding          = gt_exclude
+        CHANGING
+          it_fieldcatalog               = lt_fcat
+          it_outtab                     = gt_final
+        EXCEPTIONS
+          invalid_parameter_combination = 1
+          program_error                 = 2
+          too_many_lines                = 3
+          OTHERS                        = 4.
+
+      IF sy-subrc EQ 0.
+        SET HANDLER go_inst->handle_double_click FOR go_grid.
+        SET HANDLER go_inst->handle_toolbar               FOR go_grid.
+        SET HANDLER go_inst->handle_user_command          FOR go_grid.
+
+        CALL METHOD go_grid->set_toolbar_interactive.
+
+        CALL METHOD go_grid->register_edit_event
+          EXPORTING
+            i_event_id = cl_gui_alv_grid=>mc_evt_modified.
+
+        CALL METHOD go_grid->set_focus
+          EXPORTING
+            control = go_grid.
+      ENDIF.
+    ELSE.
+      go_inst->alv_refresh( ).
+    ENDIF.
+  ENDMETHOD.                    "alv_create
+
+  METHOD alv_refresh.
+    DATA: ls_stable TYPE lvc_s_stbl.
+    ls_stable-row = 'X'.
+    ls_stable-col = 'X'.
+
+    CALL METHOD go_grid->refresh_table_display
+      EXPORTING
+        is_stable = ls_stable.
+
+  ENDMETHOD.                    "alv_refresh
+
+  METHOD handle_toolbar.
+
+    IF p_no_bom EQ 'X'.
+      DATA: ls_toolbar TYPE stb_button,
+            lv_text    TYPE char30.
+      CLEAR ls_toolbar.
+      MOVE 3 TO ls_toolbar-butn_type.
+      APPEND ls_toolbar               TO e_object->mt_toolbar.
+
+      CLEAR ls_toolbar.
+      lv_text = TEXT-015.
+      MOVE 'CREA_BOM'               TO ls_toolbar-function.
+      MOVE icon_businav_process     TO ls_toolbar-icon.
+      MOVE lv_text                TO ls_toolbar-quickinfo.
+      MOVE ' '                      TO ls_toolbar-disabled.
+      MOVE lv_text                TO ls_toolbar-text.
+      APPEND ls_toolbar             TO e_object->mt_toolbar.
+
+      CLEAR ls_toolbar.
+    ENDIF.
+  ENDMETHOD .                    "handle_toolbar
+
+  METHOD handle_user_command.
+    DATA: row    TYPE lvc_t_row,
+          lt_row TYPE lvc_t_row.
+
+    CASE e_ucomm.
+      WHEN  'CREA_BOM'.
+        create_production_version( ).
+        refreash_data( ).
+        alv_refresh( ).
+    ENDCASE.
+  ENDMETHOD.                    "handle_user_command
+
+  METHOD handle_double_click.
+
+    DATA lr_final TYPE REF TO zpp_prod_ver_output.
+
+    CLEAR lr_final.
+    READ TABLE gt_final REFERENCE INTO lr_final INDEX e_row.
+    CHECK sy-subrc = 0.
+
+    SET PARAMETER ID 'WRK' FIELD lr_final->werks.
+    SET PARAMETER ID 'MAT' FIELD lr_final->matnr.
+    SET PARAMETER ID 'DGR' FIELD lr_final->dispo.
+
+    CASE e_column.
+      WHEN  'WERKS' OR 'MATNR' OR 'DISPO' OR 'PLNTY' OR 'ALNAL' OR 'STATUS_TEXT' OR 'ICON'.
+        CALL TRANSACTION 'C223'.
+    ENDCASE.
+
+  ENDMETHOD.                    "lcl_event_handler
+
+ENDCLASS.                    "lcl_app IMPLEMENTATION
+
+START-OF-SELECTION.
+  lcl_app=>run( ).
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0100  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0100 OUTPUT.
+  SET PF-STATUS 'STATUS_0100'.
+  IF p_no_bom EQ 'X'.
+    SET TITLEBAR   'TITLE_0102'.
+  ELSE.
+    SET TITLEBAR  'TITLE_0101'.
+  ENDIF.
+
+  go_inst->alv_create( ).
+ENDMODULE.                    "status_0100 OUTPUT
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0100 INPUT.
+  CASE sy-ucomm.
+    WHEN 'BACK' OR 'CANC' OR 'EXIT'.
+      LEAVE TO SCREEN 0.
+  ENDCASE.
+ENDMODULE.                    "user_command_0100 INPUT
+
+*** ***********************************
+* Teleki Martin[Sgenit] 15.7.2024
+***************************************

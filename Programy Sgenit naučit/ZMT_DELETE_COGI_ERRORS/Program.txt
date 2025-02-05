@@ -1,0 +1,58 @@
+*&---------------------------------------------------------------------*
+*& Report ZMT_DELETE_COGI_ERRORS
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmt_delete_cogi_errors.
+
+TABLES: affw.
+
+DATA: affw_tab TYPE TABLE OF affw.
+
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE TEXT-b01.
+PARAMETERS: p_werks TYPE werks_d DEFAULT `1710`,
+            p_matnr TYPE matnr DEFAULT `UCT_CERPADLO_X`.
+
+SELECT-OPTIONS: s_fwdat FOR affw-fwdat DEFAULT '20230605' TO '21001231'.
+SELECTION-SCREEN END OF BLOCK b01.
+
+SELECT *
+  INTO TABLE affw_tab
+  FROM affw
+  WHERE werks = p_werks AND
+        matnr = p_matnr AND
+        fwdat IN s_fwdat.
+
+IF sy-subrc = 0.
+  DELETE FROM affw WHERE werks = p_werks AND
+                  matnr = p_matnr AND
+                  fwdat IN s_fwdat.
+
+  MESSAGE `Záznam byl odstraněn z tabulky AFFW` TYPE `I`.
+
+ELSE.
+
+  MESSAGE `Žádný záznam nebyl odstraněn z tabulky AFFW` TYPE `I`.
+ENDIF.
+
+
+*CALL FUNCTION 'CO_FW_AFFW_DELETE'
+*  TABLES
+*    affw_tab = AFFW_TAB.
+*IF sy-subrc = 0.
+*  MESSAGE `Požadavek byl proveden úspěšně.` TYPE `I`.
+*ENDIF.
+
+DATA: lo_alv TYPE REF TO cl_salv_table.
+
+TRY.
+    cl_salv_table=>factory(
+      IMPORTING
+        r_salv_table = lo_alv
+      CHANGING
+        t_table      = affw_tab ).
+
+    lo_alv->display( ).
+  CATCH cx_salv_msg INTO DATA(lx_msg).
+    MESSAGE lx_msg->get_text( ) TYPE 'E'.
+ENDTRY.

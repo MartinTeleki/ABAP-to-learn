@@ -1,0 +1,263 @@
+*&---------------------------------------------------------------------*
+*& Report ZMT_BASIC_TERMINS
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZMT_BASIC_TERMINS.
+
+TABLES: afko, aufk.
+*&---------------------------------------------------------------------*
+*& Selection screen with select option
+*&---------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE TEXT-b01.
+
+  SELECT-OPTIONS: so_werks FOR aufk-werks, " závod
+
+                  so_aufnr FOR afko-aufnr,                 " ČÍSLO ZAKÁZKY
+                  so_auart FOR aufk-auart,                 " druh zakázky
+                  so_dispo FOR afko-dispo.                 " Disponent pro zakázku
+
+  PARAMETERS: p_radio1 TYPE char1 RADIOBUTTON GROUP rad1 DEFAULT 'X' USER-COMMAND flag,
+              p_radio2 TYPE char1 RADIOBUTTON GROUP rad1,
+              p_radio3 TYPE char1 RADIOBUTTON GROUP rad1.
+
+SELECTION-SCREEN END OF BLOCK b01.
+
+SELECTION-SCREEN BEGIN OF BLOCK b02 WITH FRAME TITLE TEXT-b02.
+
+  PARAMETERS: p_chang TYPE char1 AS CHECKBOX USER-COMMAND click.
+SELECTION-SCREEN END OF BLOCK b02.
+
+*&---------------------------------------------------------------------*
+*& Types
+*&---------------------------------------------------------------------*
+TYPES: BEGIN OF ty_data,
+         werks TYPE werks_d,
+         aufnr TYPE aufnr,
+         auart TYPE aufart,
+         dispo TYPE co_dispo,
+         elikz TYPE elikz,
+         gstrp TYPE pm_ordgstrp,
+         gltrp TYPE co_gltrp,
+         gltrs TYPE co_gltrs,
+         ltrmp TYPE co_ltrmp,
+       END OF ty_data.
+
+CLASS lcl_data DEFINITION.
+  PUBLIC SECTION.
+    METHODS: run,
+      read_data,
+      update_order,
+      display.
+
+  PRIVATE SECTION.
+    DATA: lt_data TYPE TABLE OF ty_data.
+
+    DATA: lt_orders TYPE TABLE OF bapi_order_key.
+
+    DATA: lv_status_ppds TYPE jest-stat VALUE 'E0005'.
+
+ENDCLASS.
+
+CLASS lcl_data IMPLEMENTATION.
+  METHOD run.
+    read_data( ).
+    IF p_chang = 'X'.
+      update_order( ).
+    ELSE.
+      display( ).
+    ENDIF.
+
+  ENDMETHOD.
+
+*&---------------------------------------------------------------------*
+*& SELECT
+*&---------------------------------------------------------------------*
+  METHOD read_data.
+    DATA: r_elikz TYPE RANGE OF elikz.
+
+    CASE 'X'.
+      WHEN p_radio1.
+      WHEN p_radio2.
+        r_elikz = VALUE #( ( sign = 'I' option = 'EQ' low = 'X' high = '' ) ).
+      WHEN p_radio3.
+        r_elikz = VALUE #( ( sign = 'I' option = 'NE' low = 'X' high = '' ) ).
+    ENDCASE.
+
+    SELECT aufk~werks,
+           afko~aufnr,
+           aufk~auart,
+           afko~dispo,
+           afpo~elikz,
+           afko~gstrp,
+           afko~gltrp,
+           afko~gltrs,
+           afpo~ltrmp
+      FROM afko
+      INNER JOIN aufk ON aufk~aufnr = afko~aufnr
+      INNER JOIN afpo ON afpo~aufnr = afko~aufnr
+      WHERE    aufk~aufnr IN @so_aufnr
+      AND      aufk~werks IN @so_werks
+      AND      aufk~auart IN @so_auart
+      AND      afko~dispo IN @so_dispo
+      AND      afpo~elikz IN @r_elikz
+      AND      afpo~ltrmp IS NOT INITIAL
+      AND      afpo~ltrmp LT afko~gltrs
+       ORDER BY afko~aufnr
+      INTO TABLE @lt_data.
+
+    IF p_radio3 EQ 'X' OR p_chang = 'X'.          " Rozvržené ukončení > Termín dodávky z plánované zakázky
+      LOOP AT lt_data REFERENCE INTO DATA(lr_data).
+        lr_data->gltrp = lr_data->gltrs.          " Pokud je elikz false
+        CLEAR: lr_data->gstrp.
+      ENDLOOP.                                    "Termín v poli Rozvrženo – konec(CAUFVD-GLTRS) přenes do pole MezTermín –
+    ENDIF.                                        "konec (CAUFVD-GLTRP), vymaž pole MezTermín – Zahájení (CAUFVD-GSTRP).
+
+  ENDMETHOD.
+*&---------------------------------------------------------------------*
+*& Update
+*&---------------------------------------------------------------------*
+  METHOD update_order.
+    DATA: ls_header TYPE cose_s_header,
+          ls_return TYPE bapiret2.
+
+    LOOP AT lt_data REFERENCE INTO DATA(lr_data).
+      MESSAGE s147(iwo_bapi2) WITH condense( val = |{ lr_data->aufnr ALPHA = OUT }| ).
+
+      CLEAR: ls_header.
+      ls_header-basic_start_date_x = 'X'.
+      ls_header-basic_end_date     = lr_data->gltrp.
+      ls_header-basic_end_date_x   = 'X'.
+
+      CALL FUNCTION 'CO_SE_PRODORD_CHANGE'
+        EXPORTING
+          iv_order_number = lr_data->aufnr
+          is_header       = ls_header
+          iv_commit       = abap_true
+        IMPORTING
+          es_return       = ls_return.
+
+      IF ls_return-type NE 'E'.
+        CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+          EXPORTING
+            wait = abap_true.
+
+        CLEAR lt_orders.
+        APPEND lr_data->aufnr TO lt_orders.
+
+        CALL FUNCTION 'BAPI_PRODORD_SCHEDULE'
+          IMPORTING
+            return = ls_return
+          TABLES
+            orders = lt_orders.
+
+        IF ls_return-type NE 'E'.
+          DATA: lv_objnr  TYPE jsto-objnr.
+
+          lv_objnr = |OR{ lr_data->aufnr }|.
+
+          CALL FUNCTION 'STATUS_CHECK'
+            EXPORTING
+              bypass_buffer     = abap_true
+              objnr             = lv_objnr
+              status            = lv_status_ppds
+            EXCEPTIONS
+              object_not_found  = 1
+              status_not_active = 2
+              OTHERS            = 3.
+
+          IF sy-subrc <> 0. " status not set
+            UPDATE afpo SET ltrmp = lr_data->gltrp
+              WHERE aufnr = lr_data->aufnr.
+
+            CALL FUNCTION 'STATUS_CHANGE_EXTERN'
+              EXPORTING
+                objnr               = lv_objnr
+                user_status         = lv_status_ppds
+              EXCEPTIONS
+                object_not_found    = 1
+                status_inconsistent = 2
+                status_not_allowed  = 3
+                OTHERS              = 4.
+
+            IF sy-subrc <> 0.
+              MESSAGE i010(ad) WITH 'Status PPDS nenastaven, chyba' sy-subrc DISPLAY LIKE 'E'.
+            ELSE.
+              MESSAGE i010(ad) WITH 'Status PPDS nastaven,' lr_data->ltrmp '->' lr_data->gltrp.
+            ENDIF.
+          ELSE.
+            MESSAGE i010(ad) WITH 'Status PPDS již nastaven,' 'termín se nemění'.
+          ENDIF.
+
+          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+            EXPORTING
+              wait = abap_true.
+
+          MESSAGE s010(ad) WITH 'Změna mezních termínů byla úspěšně dokončena'.
+        ELSE.
+          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+          MESSAGE i010(ad) WITH 'Přeplánování neprovedeno'.
+        ENDIF.
+      ELSE.
+        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+        MESSAGE i010(ad) WITH 'Změna mezních termínů neprovedena'.
+      ENDIF.
+      MESSAGE s148(iwo_bapi2) WITH condense( val = |{ lr_data->aufnr ALPHA = OUT }| ).
+    ENDLOOP.
+  ENDMETHOD.
+*&---------------------------------------------------------------------*
+*& Show data
+*&---------------------------------------------------------------------*
+  METHOD display.
+
+    DATA: lo_salv TYPE REF TO cl_salv_table,
+          lv_key  TYPE salv_s_layout_key.
+
+    DATA: lo_header TYPE REF TO cl_salv_form_layout_grid,
+          lo_h_flow TYPE REF TO cl_salv_form_layout_flow.
+
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING
+            r_salv_table = lo_salv
+          CHANGING
+            t_table      = lt_data ).
+
+        DATA(lo_fun) = lo_salv->get_functions( ).
+        lo_fun->set_all( ).
+
+        lv_key-report = sy-repid.
+        DATA(lo_lay) = lo_salv->get_layout( ).
+        lo_lay->set_save_restriction( ).
+        lo_lay->set_default( abap_true ).
+        lo_lay->set_key( value = lv_key ).
+
+        DATA(lo_cols) = lo_salv->get_columns( ).
+        lo_cols->set_optimize( ).
+
+        DATA: lo_col TYPE REF TO cl_salv_column_table.
+
+
+        CREATE OBJECT lo_header.
+
+        lo_h_flow = lo_header->create_flow( row = 1  column = 1 ).
+        lo_h_flow->create_label( text = 'Počet nalezených výsledků' ).
+
+        lo_h_flow = lo_header->create_flow( row = 1  column = 2 ).
+        lo_h_flow->create_text( text = lines( lt_data ) ).
+
+        lo_salv->set_top_of_list( lo_header ).
+
+        lo_salv->display( ).
+
+
+      CATCH cx_salv_msg.
+    ENDTRY.
+  ENDMETHOD.
+ENDCLASS.
+
+DATA: go_data TYPE REF TO lcl_data.
+
+START-OF-SELECTION.
+  CREATE OBJECT go_data.
+  go_data->run( ).

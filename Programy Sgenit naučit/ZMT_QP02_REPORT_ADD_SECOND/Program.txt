@@ -1,0 +1,261 @@
+*&---------------------------------------------------------------------*
+*& Report ZMT_QP02_REPORT_ADD_SECOND
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmt_qp02_report_add_second.
+
+SELECTION-SCREEN BEGIN OF BLOCK b1.
+  PARAMETERS: p_matnr TYPE matnr.
+SELECTION-SCREEN END OF BLOCK b1.
+
+TYPES: BEGIN OF ty_data,
+         plnnr      TYPE plnnr,    " Číslo výrobního postupu
+         plnty      TYPE plnty,    " Typ výrobního postupu
+         plnkn      TYPE plnkn,    " Pořadové číslo operace
+         vornr      TYPE vornr,    " Číslo operace
+         merknr     TYPE qmerknrp, " Čís.atributu kontroly
+         verwmerkm  TYPE qmerknr,  " Kmenový atribut kontroly
+         stichprver TYPE qstichverf,
+         kurztext   TYPE qtxt_cha,
+         loekz      TYPE lkenz,
+         mkversion  TYPE qversnrmk,
+         matnr      TYPE matnr,
+         werks      TYPE werks_d,
+       END OF   ty_data.
+
+TYPES: BEGIN OF ty_data_final,
+         matnr         TYPE matnr,
+         werks         TYPE werks_d,
+         sttag         TYPE dats,
+         entry_act     TYPE char1,
+         vornr         TYPE vornr,
+         entry_act_2   TYPE char1,
+         flg_sel_01    TYPE char1,
+         entry_act_1   TYPE char10,
+         merknr_02     TYPE qmerknrp,
+         verwmerkm_02  TYPE qmerknr,
+         mkversion_02  TYPE qversnrmk,
+         kurztext_02   TYPE qtxt_cha,
+         stichprver_02 TYPE qstichverf,
+         qualitat_02   TYPE char1,
+         sel_flg_02    TYPE char1,
+         verwmerkm     TYPE qmerknr,
+         qpmk_werks    TYPE werks_d,
+         mkversion     TYPE qversnrmk,
+         qmtb_werks    TYPE werks_d,
+       END OF ty_data_final.
+
+DATA:lt_data TYPE TABLE OF ty_data,
+     lr_data TYPE REF TO   ty_data.
+
+DATA:lt_data_final TYPE TABLE OF ty_data_final,
+     ls_data_final TYPE          ty_data_final,
+     lr_data_final TYPE REF TO   ty_data_final.
+
+DATA lt_mapl TYPE TABLE OF mapl.
+
+DATA lv_vornr TYPE vornr.
+
+DATA: lv_merknr TYPE qmerknrp.
+
+DATA lv_datum TYPE char10.
+
+DATA: lv_werks       TYPE werks_d,
+      lv_entry_act   TYPE char1,
+      lv_entry_act_1 TYPE char10,
+      lv_entry_act_2 TYPE char1.
+
+DATA: lv_has_non_x TYPE abap_bool.
+
+DATA: lo_salv TYPE REF TO cl_salv_table,
+      lv_key  TYPE salv_s_layout_key.
+
+DATA: lo_header TYPE REF TO cl_salv_form_layout_grid,
+      lo_h_flow TYPE REF TO cl_salv_form_layout_flow.
+
+
+lv_has_non_x = abap_false.
+
+lv_vornr       = `10`.
+lv_merknr      = `190`.
+lv_werks       = `1710`.
+lv_entry_act_2 = `4`.
+lv_entry_act_1 = `9999`.
+lv_entry_act   = `1`.
+
+
+lv_vornr = |{ lv_vornr ALPHA = IN }|.
+
+lv_datum = |{ sy-datum+6(2) }.{ sy-datum+4(2) }.{ sy-datum(4) }|.
+
+SELECT *
+ INTO TABLE lt_mapl
+ FROM mapl
+ WHERE matnr = p_matnr.
+
+IF lt_mapl[] IS NOT INITIAL.
+  SELECT plpo~plnnr,
+         plpo~plnty,
+         plpo~plnkn,
+         plpo~vornr,
+         plmk~merknr,
+         plmk~verwmerkm,
+         plmk~stichprver,
+         plmk~kurztext,
+
+         plmk~loekz,
+         plmk~mkversion,
+         mapl~matnr,
+         mapl~werks
+    INTO TABLE @lt_data
+    FROM plpo
+    INNER JOIN plmk ON  plpo~plnnr = plmk~plnnr
+                    AND plpo~plnty = plmk~plnty
+                    AND plpo~plnkn = plmk~plnkn
+    INNER JOIN mapl ON  plpo~plnnr = mapl~plnnr
+                    AND plpo~plnty = mapl~plnty
+
+    FOR ALL ENTRIES IN @lt_mapl
+    WHERE plpo~plnnr = @lt_mapl-plnnr
+      AND plpo~plnty = @lt_mapl-plnty.
+
+  IF lt_data[] IS NOT INITIAL.
+    DELETE lt_data WHERE loekz IS NOT INITIAL.
+  ENDIF.
+
+  SORT lt_data ASCENDING BY vornr.
+
+  LOOP AT lt_data REFERENCE INTO lr_data.
+
+    ls_data_final-matnr         = lr_data->matnr.
+    ls_data_final-werks         = lr_data->werks.
+    ls_data_final-sttag         = lv_datum.
+    ls_data_final-entry_act     = lv_entry_act.
+    ls_data_final-vornr         = lr_data->vornr.
+    ls_data_final-entry_act_2   = lv_entry_act_2.
+    ls_data_final-flg_sel_01    = abap_true.
+    ls_data_final-entry_act_1   = lv_entry_act_1.
+    ls_data_final-merknr_02     = lr_data->merknr.
+    ls_data_final-verwmerkm_02  = lr_data->verwmerkm.
+    ls_data_final-mkversion_02  = lr_data->mkversion.
+    ls_data_final-kurztext_02   = lr_data->kurztext.
+    ls_data_final-stichprver_02 = lr_data->stichprver.
+    ls_data_final-qualitat_02   = abap_true.
+    ls_data_final-sel_flg_02    = abap_true.
+    ls_data_final-verwmerkm     = lr_data->verwmerkm.
+    ls_data_final-qpmk_werks    = lv_werks.
+    ls_data_final-mkversion     = lr_data->mkversion.
+    ls_data_final-qmtb_werks    = space.
+
+    APPEND ls_data_final TO lt_data_final.
+  ENDLOOP.
+
+*-------------------------------------------------------------------------------*
+  "Display
+*-------------------------------------------------------------------------------*
+
+  TRY.
+      cl_salv_table=>factory(
+        IMPORTING
+          r_salv_table = lo_salv
+        CHANGING
+          t_table      = lt_data_final ).
+
+      DATA(lo_fun) = lo_salv->get_functions( ).
+      lo_fun->set_all( ).
+
+      lv_key-report = sy-repid.
+      DATA(lo_lay) = lo_salv->get_layout( ).
+      lo_lay->set_save_restriction( ).
+      lo_lay->set_default( abap_true ).
+      lo_lay->set_key( value = lv_key ).
+
+      DATA(lo_cols) = lo_salv->get_columns( ).
+      lo_cols->set_optimize( ).
+
+      DATA: lo_col TYPE REF TO cl_salv_column_table.
+
+      DATA : cl_columns TYPE REF TO cl_salv_columns,
+             cl_column  TYPE REF TO cl_salv_column.
+
+      TRY.
+          cl_columns = lo_salv->get_columns( ).
+
+          cl_column = cl_columns->get_column( |MATNR| ).
+          cl_column->set_long_text( |RC27M-MATNR| ).
+
+          cl_column = cl_columns->get_column( |WERKS| ).
+          cl_column->set_long_text( |RC27M-WERKS| ).
+
+          cl_column = cl_columns->get_column( |STTAG| ).
+          cl_column->set_long_text( |RC271-STTAG| ).
+
+          cl_column = cl_columns->get_column( |ENTRY_ACT| ).
+          cl_column->set_long_text( |RC27X-ENTRY_ACT| ).
+
+          cl_column = cl_columns->get_column( |VORNR| ).
+          cl_column->set_long_text( |RC27H-VORNR| ).
+
+          cl_column = cl_columns->get_column( |ENTRY_ACT_2| ).
+          cl_column->set_long_text( |RC27X-ENTRY_ACT_2| ).
+
+          cl_column = cl_columns->get_column( |FLG_SEL_01| ).
+          cl_column->set_long_text( |RC27X-FLG_SEL(01)| ).
+
+          cl_column = cl_columns->get_column( |ENTRY_ACT_1| ).
+          cl_column->set_long_text( |RQPAS-ENTRY_ACT_1| ).
+
+          cl_column = cl_columns->get_column( |MERKNR_02| ).
+          cl_column->set_long_text( |PLMKB-MERKNR(02)| ).
+
+          cl_column = cl_columns->get_column( |VERWMERKM_02| ).
+          cl_column->set_long_text( |PLMKB-VERWMERKM(02)| ).
+
+          cl_column = cl_columns->get_column( |MKVERSION_02| ).
+          cl_column->set_long_text( |PLMKB-MKVERSION(02)| ).
+
+          cl_column = cl_columns->get_column( |KURZTEXT_02| ).
+          cl_column->set_long_text( |PLMKB-KURZTEXT(02)| ).
+
+          cl_column = cl_columns->get_column( |STICHPRVER_02| ).
+          cl_column->set_long_text( |PLMKB-STICHPRVER(02)| ).
+
+          cl_column = cl_columns->get_column( |QUALITAT_02| ).
+          cl_column->set_long_text( |RQPAS-QUALITAT(02)| ).
+
+          cl_column = cl_columns->get_column( |SEL_FLG_02| ).
+          cl_column->set_long_text( |RQPAS-SEL_FLG(02)| ).
+
+          cl_column = cl_columns->get_column( |VERWMERKM| ).
+          cl_column->set_long_text( |PLMKB-VERWMERKM| ).
+
+          cl_column = cl_columns->get_column( |QPMK_WERKS| ).
+          cl_column->set_long_text( |PLMKB-QPMK_WERKS| ).
+
+          cl_column = cl_columns->get_column( |MKVERSION| ).
+          cl_column->set_long_text( |PLMKB-MKVERSION| ).
+
+          cl_column = cl_columns->get_column( |QMTB_WERKS| ).
+          cl_column->set_long_text( |PLMKB-QMTB_WERKS| ).
+        CATCH cx_salv_msg.
+      ENDTRY.
+
+      CREATE OBJECT lo_header.
+
+      lo_h_flow = lo_header->create_flow( row = 1  column = 1 ).
+      lo_h_flow->create_label( text = 'Počet nalezených výsledků' ).
+
+      lo_h_flow = lo_header->create_flow( row = 1  column = 2 ).
+      lo_h_flow->create_text( text = lines( lt_data ) ).
+
+      lo_salv->set_top_of_list( lo_header ).
+
+      lo_salv->display( ).
+*-------------------------------------------------------------------------------*
+      "Display
+*-------------------------------------------------------------------------------*
+    CATCH cx_salv_msg.
+  ENDTRY.
+
+ENDIF.

@@ -1,0 +1,138 @@
+*&---------------------------------------------------------------------*
+*&  Teleki Martin 24.07.2024 Sgenit
+*&---------------------------------------------------------------------*
+
+IF sy-uname = `ATELEKI`.
+  BREAK-POINT.
+ENDIF.
+
+
+DATA: lr_caufvd TYPE REF TO caufvd,
+      lr_afrud  TYPE REF TO afrud,
+      lv_pspnr  TYPE ps_intnr,
+      lv_vornr  TYPE vornr,
+      lt_afvc   TYPE TABLE OF afvc,
+      lv_index  TYPE i,
+      lv_person TYPE char1,
+      lv_emnam  TYPE bas_check_pernr-name,
+      msg       TYPE REF TO cl_bcs_message,
+      lv_adress TYPE bcs_address,
+      v_xstring TYPE xstring.
+
+
+
+lv_person = `P`.
+
+
+LOOP AT caufvd_tab REFERENCE INTO lr_caufvd.
+
+  LOOP AT afrud_tab REFERENCE INTO lr_afrud
+   WHERE aufnr = lr_caufvd->aufnr.
+
+    CHECK sy-subrc = 0.
+
+    " zaverecne zphl
+    CHECK lr_afrud->aueru = 'X'.
+
+    " nacteni operaci
+    SELECT * FROM afvc INTO TABLE lt_afvc
+      WHERE aufpl = lr_afrud->aufpl
+      ORDER BY vornr.
+
+    "Hledání BEDID
+    SELECT SINGLE bedid FROM afko INTO @DATA(lv_bedid)
+      WHERE aufnr = @lr_afrud->aufnr.
+
+
+
+    SELECT SINGLE pernr FROM kbed INTO @DATA(lv_pernr)
+      WHERE bedid = @lv_bedid
+      AND   vornr = @lr_afrud->vornr
+      AND   otype = @lv_person.
+
+    CALL FUNCTION 'HR_TMW_GET_EMPLOYEE_NAME'
+      EXPORTING
+        person_no = lv_pernr
+      IMPORTING
+        edit_name = lv_emnam.
+
+    SELECT SINGLE smtp_addr FROM puser002 INTO @lv_adress
+      WHERE name_text = @lv_emnam.
+
+    "Odeslání emailu
+
+    IF lv_adress IS NOT INITIAL.
+      TRY.
+          "Vytvoření objektu emailu
+          CREATE OBJECT msg.
+
+          "Email na Jana Soukupa -> jan.soukup@sgenit.cz
+          "Nastavení předmětu, textu a příjemce emailu
+          msg->set_subject( 'Test subject' ).
+          msg->set_main_doc( iv_contents_txt = 'Test e-mail body <strong>Some text</strong>' ).
+          msg->add_recipient( lv_adress ).
+
+
+*" Přidání přílohy
+*        msg->add_attachment(
+*          EXPORTING
+*            iv_doctype      = 'EXT'
+*            iv_filename     = 'Report.xlsx'
+*            iv_contents_txt = `Hi`
+*        ).
+
+          msg->send( ).
+          MESSAGE 'Message have been sent' TYPE `S`.
+
+        CATCH cx_sy_itab_line_not_found.
+
+      ENDTRY.
+    ENDIF.
+
+    " test nasledujici operace
+    READ TABLE lt_afvc TRANSPORTING NO FIELDS
+      WITH KEY vornr = lr_afrud->vornr.
+    lv_index = sy-tabix + 1. " nasl. operace
+
+    TRY.
+        DATA(lr_afvc) = REF #( lt_afvc[ lv_index ] ).
+        " nastav status
+        DATA lv_objnr       TYPE jsto-objnr.
+
+        lv_objnr = |NV{ lr_afvc->aufpl }{ lr_afvc->aplzl }|.
+
+        CALL FUNCTION 'STATUS_CHANGE_EXTERN'
+          EXPORTING
+            objnr               = lv_objnr
+            user_status         = 'E0010'
+          EXCEPTIONS
+            object_not_found    = 1
+            status_inconsistent = 2
+            status_not_allowed  = 3
+            OTHERS              = 4.
+
+        IF sy-subrc <> 0.
+* Implement suitable error handling here
+        ENDIF.
+
+      CATCH cx_sy_itab_line_not_found.
+        " dalsi operace neni, predani do CRM
+
+        SELECT SINGLE psphi FROM prps INTO lv_pspnr
+          WHERE pspnr = lr_caufvd->projn.
+        CHECK sy-subrc = 0.
+
+        " predani do CRM
+        CALL FUNCTION 'ZPS_CRM_UPDATE_CRM'
+          EXPORTING
+            iv_pspnr  = lv_pspnr
+            is_caufvd = lr_caufvd->*
+            is_afrud  = lr_afrud->*.
+    ENDTRY.
+
+  ENDLOOP.
+ENDLOOP.
+
+*&---------------------------------------------------------------------*
+*&  Teleki Martin 25.07.2024 Sgenit
+*&---------------------------------------------------------------------*

@@ -1,0 +1,785 @@
+*&---------------------------------------------------------------------*
+*& Report  ZMRP_KITTING_MAINTENANCE
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+REPORT zmt_kitting_maintenance.
+
+TYPES: BEGIN OF data_row,
+         row_id TYPE int4.
+         INCLUDE TYPE zmrp_kitting.
+TYPES: END OF data_row.
+
+*&---------------------------------------------------------------------*
+* Data declarations
+*&---------------------------------------------------------------------*
+DATA: gt_final     TYPE TABLE OF zmrp_kitting,
+      gt_delln     TYPE TABLE OF zmrp_kitting,
+      gv_changed   TYPE          flag,
+      gv_read_only TYPE          flag,
+      gs_variant   TYPE          disvariant.
+
+CONSTANTS: gc_werks TYPE werks_d VALUE '1710'.
+
+*&---------------------------------------------------------------------*
+* Local class - declaration
+*&---------------------------------------------------------------------*
+CLASS lcl_app DEFINITION.
+  PUBLIC SECTION.
+    CLASS-METHODS
+      run.
+
+    METHODS:
+*----------------------------------------------------------------------*
+      read,
+      display,
+      save,
+      check_changed_data EXPORTING e_valid TYPE char01,
+*----------------------------------------------------------------------*
+      alv_create,
+      alv_refresh,
+*----------------------------------------------------------------------*
+      handle_data_changed_finished FOR EVENT data_changed_finished OF cl_gui_alv_grid
+        IMPORTING e_modified,
+*----------------------------------------------------------------------*
+      handle_data_changed FOR EVENT data_changed OF cl_gui_alv_grid
+        IMPORTING er_data_changed e_onf4 e_onf4_before e_onf4_after e_ucomm,
+*----------------------------------------------------------------------*
+      check_double_entries
+        IMPORTING
+          ir_data_changed  TYPE REF TO cl_alv_changed_data_protocol
+        EXPORTING
+          ev_error_in_data TYPE flag,
+*----------------------------------------------------------------------*
+      validate_entries
+        IMPORTING
+          ir_data_changed  TYPE REF TO cl_alv_changed_data_protocol
+        EXPORTING
+          ev_error_in_data TYPE flag.
+*----------------------------------------------------------------------*
+
+  PRIVATE SECTION.
+    DATA: mo_alv              TYPE REF TO   cl_salv_table,
+          go_grid             TYPE REF TO   cl_gui_alv_grid,
+          go_custom_container TYPE REF TO   cl_gui_custom_container,
+          go_viewer           TYPE REF TO   cl_gui_chart_engine,
+          gt_selected_rows    TYPE          lvc_t_row.
+
+ENDCLASS.                    "lcl_app DEFINITION
+
+DATA: go_inst TYPE REF TO lcl_app.
+
+*&---------------------------------------------------------------------*
+* Local class - IMPLEMENTATION
+*&---------------------------------------------------------------------*
+CLASS lcl_app IMPLEMENTATION.
+  METHOD run.
+    CREATE OBJECT go_inst.
+    go_inst->read( ).
+    go_inst->display( ).
+  ENDMETHOD.                    "run
+
+  METHOD read.
+    SELECT * FROM zmrp_kitting
+      INTO TABLE gt_final.
+  ENDMETHOD.                    "read
+
+  METHOD display.
+    CALL SCREEN 0100.
+  ENDMETHOD.                    "display
+
+  METHOD check_changed_data.
+    CALL METHOD go_grid->check_changed_data
+      IMPORTING
+        e_valid = e_valid.
+  ENDMETHOD.                    "check_changed_data
+
+  METHOD save.
+    DATA: lv_valid TYPE c.
+
+    CALL METHOD me->check_changed_data
+      IMPORTING
+        e_valid = lv_valid.
+
+    IF lv_valid IS NOT INITIAL.
+
+      CLEAR: gt_delln.
+      SELECT * FROM zmrp_kitting
+        INTO TABLE gt_delln.
+
+      IF gt_delln IS NOT INITIAL.
+        DELETE zmrp_kitting FROM TABLE gt_delln.
+        IF sy-subrc NE 0.
+          ROLLBACK WORK.
+          MESSAGE i010(ad) WITH 'Data saving error.'(s02).
+          EXIT.
+        ENDIF.
+      ENDIF.
+
+      DELETE gt_final WHERE matnr IS INITIAL
+                        AND dispo IS INITIAL
+                        AND nest  IS INITIAL.
+
+      IF gt_final[] IS NOT INITIAL.
+        MODIFY zmrp_kitting FROM TABLE gt_final.
+
+        IF sy-subrc EQ 0.
+          COMMIT WORK.
+          MESSAGE i010(ad) WITH 'Data saved.'(s01).
+          CLEAR: gv_changed.
+        ELSE.
+          ROLLBACK WORK.
+          MESSAGE i010(ad) WITH 'Data saving error.'(s02).
+        ENDIF.
+      ELSE.
+        MESSAGE i010(ad) WITH 'No data to be saved.'(s06).
+        CLEAR: gv_changed.
+      ENDIF.
+    ELSE.
+      MESSAGE i000(0k) WITH 'Errors still exist.'(s03).
+    ENDIF.
+
+    go_inst->alv_refresh( ).
+
+  ENDMETHOD.                    "display
+
+  METHOD alv_create.
+    DATA: lt_fcat     TYPE        lvc_t_fcat,
+          ls_layout   TYPE        lvc_s_layo,
+          lr_fieldcat TYPE REF TO lvc_s_fcat,
+          ls_exclude  TYPE        ui_func,
+          gt_exclude  TYPE        ui_functions.
+
+    IF go_custom_container IS INITIAL.
+      CREATE OBJECT go_custom_container
+        EXPORTING
+          container_name = 'ALV_GRID'.
+      CREATE OBJECT go_grid
+        EXPORTING
+          i_parent = go_custom_container.
+
+      CALL FUNCTION 'LVC_FIELDCATALOG_MERGE'
+        EXPORTING
+          i_structure_name       = 'ZMRP_KITTING'
+        CHANGING
+          ct_fieldcat            = lt_fcat
+        EXCEPTIONS
+          inconsistent_interface = 1
+          program_error          = 2
+          OTHERS                 = 3.
+
+      LOOP AT lt_fcat REFERENCE INTO lr_fieldcat.
+        CASE lr_fieldcat->fieldname.
+          WHEN 'MATNR' OR 'DISPO'.
+            IF gv_read_only IS INITIAL.
+              lr_fieldcat->edit     = 'X'.
+            ENDIF.
+          WHEN 'WERKS'.
+            lr_fieldcat->edit       = ''.
+          WHEN 'NEST'.
+            lr_fieldcat->f4availabl = 'X'.
+            lr_fieldcat->edit       = 'X'.
+        ENDCASE.
+      ENDLOOP.
+
+      ls_exclude = cl_gui_alv_grid=>mc_fc_detail.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_sum.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_info.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_graph.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_subtot.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_minimum.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_maximum.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_average.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_auf.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_views.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_info.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_graph.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_print.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_check.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_refresh.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_insert_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_cut.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_undo.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_paste_new_row.
+      APPEND ls_exclude TO gt_exclude.
+      ls_exclude = cl_gui_alv_grid=>mc_fc_loc_copy.
+      APPEND ls_exclude TO gt_exclude.
+
+      ls_layout-sel_mode   = 'A'.
+*      ls_layout-zebra      = 'X'.
+      ls_layout-cwidth_opt = 'X'.
+      gs_variant-report    = sy-repid.
+      gs_variant-username  = sy-uname.
+
+      CALL METHOD go_grid->set_table_for_first_display
+        EXPORTING
+          is_variant                    = gs_variant
+          is_layout                     = ls_layout
+          i_save                        = 'A'
+          it_toolbar_excluding          = gt_exclude
+        CHANGING
+          it_fieldcatalog               = lt_fcat
+          it_outtab                     = gt_final
+        EXCEPTIONS
+          invalid_parameter_combination = 1
+          program_error                 = 2
+          too_many_lines                = 3
+          OTHERS                        = 4.
+
+      IF sy-subrc EQ 0 AND gv_read_only IS INITIAL.
+        SET HANDLER go_inst->handle_data_changed          FOR go_grid.
+        SET HANDLER go_inst->handle_data_changed_finished FOR go_grid.
+
+*        CALL METHOD go_grid->register_edit_event
+*          EXPORTING
+*            i_event_id = cl_gui_alv_grid=>mc_evt_modified.
+
+        CALL METHOD go_grid->register_edit_event
+          EXPORTING
+            i_event_id = cl_gui_alv_grid=>mc_evt_enter.
+
+        CALL METHOD go_grid->set_focus
+          EXPORTING
+            control = go_grid.
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.                    "alv_create
+
+  METHOD handle_data_changed.
+    DATA: lv_error TYPE flag.
+
+    gv_changed = 'X'.
+
+    me->validate_entries(
+      EXPORTING
+        ir_data_changed  = er_data_changed
+      IMPORTING
+        ev_error_in_data = lv_error
+    ).
+
+    me->check_double_entries(
+      EXPORTING
+        ir_data_changed  = er_data_changed
+      IMPORTING
+        ev_error_in_data = lv_error
+    ).
+
+  ENDMETHOD.                    "handle_data_changed
+
+  METHOD validate_entries.
+    DATA: lr_modcels TYPE REF TO   lvc_s_modi,
+          lr_delline TYPE REF TO   lvc_s_moce,
+          lv_value   TYPE          lvc_value,
+          ls_line    TYPE          zmrp_kitting,
+          lr_line    TYPE REF TO   zmrp_kitting,
+          lv_dispo   TYPE          dispo,
+          ls_mard    TYPE          mard,
+          lv_check   TYPE          flag,
+          lv_ok      TYPE          char1,
+          lv_row_id  TYPE          int4,
+          lr_final   TYPE REF TO   zmrp_kitting.
+
+*----------------------------------------------------------------------*
+* Prefill plant
+*----------------------------------------------------------------------*
+    LOOP AT ir_data_changed->mt_mod_cells REFERENCE INTO lr_modcels
+      WHERE  fieldname EQ 'WERKS'.
+      CALL METHOD ir_data_changed->modify_cell
+        EXPORTING
+          i_row_id    = lr_modcels->row_id
+          i_fieldname = lr_modcels->fieldname
+          i_value     = gc_werks.
+
+      lr_modcels->value = gc_werks.
+    ENDLOOP.
+
+    LOOP AT ir_data_changed->mt_inserted_rows REFERENCE INTO lr_delline.
+      CALL METHOD ir_data_changed->modify_cell
+        EXPORTING
+          i_row_id    = lr_delline->row_id
+          i_fieldname = 'WERKS'
+          i_value     = gc_werks.
+    ENDLOOP.
+
+    LOOP AT gt_final REFERENCE INTO lr_final
+      WHERE werks IS INITIAL.
+      lr_final->werks = gc_werks.
+    ENDLOOP.
+
+*----------------------------------------------------------------------*
+* Changed lines
+*----------------------------------------------------------------------*
+    SORT ir_data_changed->mt_mod_cells BY row_id.
+
+    LOOP AT ir_data_changed->mt_mod_cells REFERENCE INTO lr_modcels.
+
+      IF lv_row_id NE lr_modcels->row_id.
+        lv_row_id = lr_modcels->row_id.
+        CLEAR: ls_line.
+      ENDIF.
+
+      IF   lr_modcels->value IS INITIAL.
+        CALL METHOD ir_data_changed->add_protocol_entry
+          EXPORTING
+            i_msgid     = 'AD'
+            i_msgno     = 010
+            i_msgty     = 'E'
+            i_msgv1     = 'Fill in required fields.'
+            i_fieldname = lr_modcels->fieldname
+            i_row_id    = lr_modcels->row_id.
+
+        ev_error_in_data = 'X'.
+
+      ELSE.
+        CLEAR: ls_line.
+
+        CASE lr_modcels->fieldname.
+          WHEN 'MATNR'.
+            DELETE ir_data_changed->mt_protocol
+              WHERE row_id    EQ lr_modcels->row_id
+                AND fieldname EQ 'MATNR'.
+
+            CALL METHOD ir_data_changed->get_cell_value
+              EXPORTING
+                i_row_id    = lr_modcels->row_id
+                i_fieldname = 'MATNR'
+              IMPORTING
+                e_value     = ls_line-matnr.
+
+            IF ls_line-matnr IS NOT INITIAL.
+
+              SELECT SINGLE matnr FROM marc
+                INTO ls_line-matnr
+                WHERE matnr EQ ls_line-matnr
+                  AND werks EQ gc_werks.
+
+              IF sy-subrc NE 0.
+                CALL METHOD ir_data_changed->add_protocol_entry
+                  EXPORTING
+                    i_msgid     = 'AD'
+                    i_msgno     = 010
+                    i_msgty     = 'E'
+                    i_msgv1     = 'Material doesn´t exist for plant CZ16.'
+                    i_fieldname = 'MATNR'
+                    i_row_id    = lr_modcels->row_id.
+
+                ev_error_in_data = 'X'.
+              ENDIF.
+            ENDIF.
+          WHEN 'DISPO'.
+            READ TABLE ir_data_changed->mt_protocol
+              WITH KEY row_id    = lr_modcels->row_id
+                       fieldname = 'DISPO'
+              TRANSPORTING NO FIELDS.
+
+            IF sy-subrc NE 0.
+
+              CLEAR: lv_dispo.
+*
+*              CALL METHOD ir_data_changed->get_cell_value
+*                EXPORTING
+*                  i_row_id    = lr_modcels->row_id
+*                  i_fieldname = 'MATNR'
+*                IMPORTING
+*                  e_value     = ls_line-matnr.
+
+              CALL METHOD ir_data_changed->get_cell_value
+                EXPORTING
+                  i_row_id    = lr_modcels->row_id
+                  i_fieldname = 'DISPO'
+                IMPORTING
+                  e_value     = ls_line-dispo.
+
+              IF ls_line-dispo IS NOT INITIAL.
+
+*                SELECT SINGLE dispo FROM marc
+*                  INTO lv_dispo
+*                  WHERE matnr EQ ls_line-matnr
+*                    AND werks EQ gc_werks.
+
+                SELECT SINGLE dispo FROM t024d
+                  INTO lv_dispo
+                  WHERE werks EQ gc_werks
+                    AND dispo EQ ls_line-dispo.
+
+*                IF lv_dispo NE ls_line-dispo.
+                IF sy-subrc NE 0.
+                  CALL METHOD ir_data_changed->add_protocol_entry
+                    EXPORTING
+                      i_msgid     = 'AD'
+                      i_msgno     = 010
+                      i_msgty     = 'E'
+                      i_msgv1     = 'MRP Controller doesn´t exist for plant CZ16.'
+                      i_fieldname = 'DISPO'
+                      i_row_id    = lr_modcels->row_id.
+
+                  ev_error_in_data = 'X'.
+                ENDIF.
+              ENDIF.
+            ENDIF.
+        ENDCASE.
+      ENDIF.
+    ENDLOOP.
+  ENDMETHOD.                    "validate_entries
+
+  METHOD check_double_entries.
+    DATA: lr_good_cells TYPE REF TO   lvc_s_modi,
+          lr_del_row    TYPE REF TO   lvc_s_moce,
+          lt_good_ones  TYPE TABLE OF data_row,
+          lr_final_d    TYPE REF TO   zmrp_kitting,
+          lr_good_ones  TYPE REF TO   data_row,
+          ls_good_ones  TYPE          data_row,
+          lv_row_id     TYPE          int4,
+          lv_reentered  TYPE          flag,
+          lv_found      TYPE          flag.
+
+    SORT ir_data_changed->mt_good_cells BY row_id.
+
+    LOOP AT ir_data_changed->mt_good_cells REFERENCE INTO lr_good_cells
+      WHERE fieldname EQ 'WERKS'
+         OR fieldname EQ 'MATNR'
+         OR fieldname EQ 'DISPO'
+         OR fieldname EQ 'NEST'.
+
+      IF lv_row_id IS INITIAL.
+        lv_row_id = lr_good_cells->row_id.
+      ENDIF.
+
+      IF    lv_row_id NE lr_good_cells->row_id.
+        lv_row_id = lr_good_cells->row_id.
+        IF   ls_good_ones-werks IS INITIAL
+          OR ls_good_ones-matnr IS INITIAL
+          OR ls_good_ones-dispo IS INITIAL
+          OR ls_good_ones-nest  IS INITIAL.
+          READ TABLE gt_final REFERENCE INTO lr_final_d INDEX lv_row_id.
+          IF sy-subrc EQ 0.
+            IF ls_good_ones-werks IS INITIAL.
+              ls_good_ones-werks = lr_final_d->werks.
+            ENDIF.
+            IF ls_good_ones-matnr IS INITIAL.
+              ls_good_ones-matnr = lr_final_d->matnr.
+            ENDIF.
+            IF ls_good_ones-dispo IS INITIAL.
+              ls_good_ones-dispo = lr_final_d->dispo.
+            ENDIF.
+            IF ls_good_ones-nest  IS INITIAL.
+              ls_good_ones-nest  = lr_final_d->nest.
+            ENDIF.
+          ENDIF.
+        ENDIF.
+
+        READ TABLE lt_good_ones
+          WITH KEY werks = ls_good_ones-werks
+                   matnr = ls_good_ones-matnr
+                   dispo = ls_good_ones-dispo
+                   nest  = ls_good_ones-nest
+          TRANSPORTING NO FIELDS.
+
+        IF sy-subrc EQ 0.
+          CALL METHOD ir_data_changed->add_protocol_entry
+            EXPORTING
+              i_msgid     = '0K'
+              i_msgno     = '000'
+              i_msgty     = 'E'
+              i_msgv1     = 'Material already exists with the same key.'
+              i_fieldname = 'MATNR'
+              i_row_id    = ls_good_ones-row_id.
+
+          ev_error_in_data = 'X'.
+          CLEAR: ls_good_ones.
+        ELSE.
+          APPEND ls_good_ones TO lt_good_ones.
+          CLEAR: ls_good_ones.
+        ENDIF.
+      ENDIF.
+
+      IF ls_good_ones IS INITIAL.
+        ls_good_ones-row_id = lr_good_cells->row_id.
+
+        CALL METHOD ir_data_changed->get_cell_value
+          EXPORTING
+            i_row_id    = lr_good_cells->row_id
+            i_fieldname = 'WERKS'
+          IMPORTING
+            e_value     = ls_good_ones-werks.
+
+        CALL METHOD ir_data_changed->get_cell_value
+          EXPORTING
+            i_row_id    = lr_good_cells->row_id
+            i_fieldname = 'MATNR'
+          IMPORTING
+            e_value     = ls_good_ones-matnr.
+
+        CALL METHOD ir_data_changed->get_cell_value
+          EXPORTING
+            i_row_id    = lr_good_cells->row_id
+            i_fieldname = 'DISPO'
+          IMPORTING
+            e_value     = ls_good_ones-dispo.
+
+        CALL METHOD ir_data_changed->get_cell_value
+          EXPORTING
+            i_row_id    = lr_good_cells->row_id
+            i_fieldname = 'NEST'
+          IMPORTING
+            e_value     = ls_good_ones-nest.
+*      ENDCASE.
+      ENDIF.
+    ENDLOOP.
+
+    IF ls_good_ones IS NOT INITIAL.
+      IF   ls_good_ones-werks IS INITIAL
+        OR ls_good_ones-matnr IS INITIAL
+        OR ls_good_ones-dispo IS INITIAL
+        OR ls_good_ones-nest IS INITIAL.
+        READ TABLE gt_final REFERENCE INTO lr_final_d INDEX lv_row_id.
+        IF sy-subrc EQ 0.
+          IF ls_good_ones-werks IS INITIAL.
+            ls_good_ones-werks = lr_final_d->werks.
+          ENDIF.
+          IF ls_good_ones-matnr IS INITIAL.
+            ls_good_ones-matnr = lr_final_d->matnr.
+          ENDIF.
+          IF ls_good_ones-dispo IS INITIAL.
+            ls_good_ones-dispo = lr_final_d->dispo.
+          ENDIF.
+          IF ls_good_ones-nest IS INITIAL.
+            ls_good_ones-nest = lr_final_d->nest.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+
+      READ TABLE lt_good_ones
+        WITH KEY werks = ls_good_ones-werks
+                 matnr = ls_good_ones-matnr
+                 dispo = ls_good_ones-dispo
+                 nest  = ls_good_ones-nest
+        TRANSPORTING NO FIELDS.
+
+      IF sy-subrc EQ 0.
+        CALL METHOD ir_data_changed->add_protocol_entry
+          EXPORTING
+            i_msgid     = '0K'
+            i_msgno     = '000'
+            i_msgty     = 'E'
+            i_msgv1     = 'Material already exists with the same key.'
+            i_fieldname = 'MATNR'
+            i_row_id    = lr_good_cells->row_id.
+
+        ev_error_in_data = 'X'.
+        CLEAR: ls_good_ones.
+      ELSE.
+        APPEND ls_good_ones TO lt_good_ones.
+        CLEAR: ls_good_ones.
+      ENDIF.
+    ENDIF.
+
+    LOOP AT lt_good_ones REFERENCE INTO lr_good_ones.
+      CLEAR: lv_found.
+      LOOP AT gt_final REFERENCE INTO lr_final_d
+        WHERE werks EQ lr_good_ones->werks
+          AND matnr EQ lr_good_ones->matnr
+          AND dispo EQ lr_good_ones->dispo
+          AND nest  EQ lr_good_ones->nest.
+        IF sy-tabix NE lr_good_ones->row_id.
+          lv_found = 'X'.
+        ENDIF.
+      ENDLOOP.
+
+      IF lv_found IS NOT INITIAL.
+        CLEAR: lv_reentered.
+
+        LOOP AT ir_data_changed->mt_deleted_rows REFERENCE INTO lr_del_row.
+          READ TABLE gt_final REFERENCE INTO lr_final_d INDEX lr_del_row->row_id.
+          IF sy-subrc NE 0.
+*            MESSAGE i000(0k) WITH 'This key previosly deleted.'.
+          ELSEIF lr_final_d->werks EQ lr_good_ones->werks
+             AND lr_final_d->matnr EQ lr_good_ones->matnr
+             AND lr_final_d->dispo EQ lr_good_ones->dispo
+             AND lr_final_d->nest  EQ lr_good_ones->nest.
+            lv_reentered = 'X'.
+          ENDIF.
+        ENDLOOP.
+
+        IF lv_reentered NE 'X'.
+          CALL METHOD ir_data_changed->add_protocol_entry
+            EXPORTING
+              i_msgid     = '0K'
+              i_msgno     = '000'
+              i_msgty     = 'E'
+              i_msgv1     = 'Material already exists with the same key.'
+              i_fieldname = 'MATNR'
+              i_row_id    = lr_good_cells->row_id.
+
+          ev_error_in_data = 'X'.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+  ENDMETHOD.                    "check_double_entries
+
+  METHOD handle_data_changed_finished.
+    IF e_modified EQ 'X'.
+      go_inst->alv_refresh( ).
+    ENDIF.
+  ENDMETHOD.                    "handle_data_changed_finished
+
+  METHOD alv_refresh.
+    DATA: ls_stable TYPE lvc_s_stbl,
+          lt_col    TYPE lvc_t_col.
+
+*    CALL METHOD go_grid->get_selected_columns
+*      IMPORTING
+*        et_index_columns = lt_col.
+
+    ls_stable-row = 'X'.
+    ls_stable-col = 'X'.
+
+    CALL METHOD go_grid->refresh_table_display
+      EXPORTING
+        is_stable = ls_stable.
+
+  ENDMETHOD.                    "alv_refresh
+
+ENDCLASS.                    "lcl_app IMPLEMENTATION
+
+
+*-----------------------------------------------------------------------
+START-OF-SELECTION.
+*-----------------------------------------------------------------------
+
+* Check authorization
+*  AUTHORITY-CHECK OBJECT 'ZMRP_KITT'
+*           ID 'ACTVT' FIELD '01'
+*           ID 'WERKS' FIELD gc_werks.
+*
+*  IF sy-subrc <> 0.
+*    AUTHORITY-CHECK OBJECT 'ZMRP_KITT'
+*             ID 'ACTVT' FIELD '03'
+*             ID 'WERKS' FIELD gc_werks.
+*
+*    IF sy-subrc EQ 0.
+*      gv_read_only = 'X'.
+*    ELSE.
+*      MESSAGE ID 'CL' TYPE 'E' NUMBER '262'.
+*      EXIT.
+*    ENDIF.
+*  ENDIF.
+
+* Try to block table for changes
+  IF gv_read_only IS INITIAL.
+    CALL FUNCTION 'ENQUEUE_E_TABLE'
+      EXPORTING
+        tabname        = 'ZMRP_KITTING'
+      EXCEPTIONS
+        foreign_lock   = 1
+        system_failure = 2
+        OTHERS         = 3.
+
+    IF sy-subrc NE 0.
+      gv_read_only = 'X'.
+      MESSAGE ID sy-msgid TYPE 'I' NUMBER sy-msgno
+          WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDIF.
+
+  lcl_app=>run( ).
+
+  IF gv_read_only IS INITIAL.
+    CALL FUNCTION 'DEQUEUE_E_TABLE'
+      EXPORTING
+        tabname = 'ZMRP_KITTING'.
+  ENDIF.
+
+*&---------------------------------------------------------------------*
+
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0100  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0100 OUTPUT.
+  IF gv_read_only IS INITIAL.
+    SET PF-STATUS 'STATUS_0100'.
+  ELSE.
+    SET PF-STATUS 'STATUS_0100' EXCLUDING 'SAVE'.
+  ENDIF.
+  SET TITLEBAR  'TITLE_0100'.
+
+  go_inst->alv_create( ).
+ENDMODULE.                    "status_0100 OUTPUT
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0100 INPUT.
+  DATA: lv_answer TYPE char1,
+        lv_valid  TYPE char01.
+
+  CALL METHOD go_inst->check_changed_data
+    IMPORTING
+      e_valid = lv_valid.
+
+  CASE sy-ucomm.
+    WHEN 'BACK' OR 'CANC' OR 'EXIT'.
+      IF gv_changed IS NOT INITIAL.
+        IF lv_valid IS NOT INITIAL.
+          CALL FUNCTION 'POPUP_TO_CONFIRM'
+            EXPORTING
+              titlebar       = 'Save Data'(s04)
+              text_question  = 'Save modified data?'(s05)
+            IMPORTING
+              answer         = lv_answer
+            EXCEPTIONS
+              text_not_found = 1
+              OTHERS         = 2.
+
+          IF sy-subrc = 0 AND lv_answer = '1'.
+            go_inst->save( ).
+          ENDIF.
+          LEAVE TO SCREEN 0.
+        ELSE.
+          CALL FUNCTION 'POPUP_TO_CONFIRM'
+            EXPORTING
+              titlebar       = 'Leave Transakction'
+              text_question  = 'Trash invalid modified data?'
+            IMPORTING
+              answer         = lv_answer
+            EXCEPTIONS
+              text_not_found = 1
+              OTHERS         = 2.
+
+          IF sy-subrc = 0 AND lv_answer = '1'.
+            LEAVE TO SCREEN 0.
+          ENDIF.
+        ENDIF.
+      ELSE.
+        LEAVE TO SCREEN 0.
+      ENDIF.
+    WHEN 'SAVE'.
+      go_inst->save( ).
+  ENDCASE.
+ENDMODULE.                    "user_command_0100 INPUT
