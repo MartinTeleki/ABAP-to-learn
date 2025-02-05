@@ -1,0 +1,174 @@
+*&---------------------------------------------------------------------*
+*& Report ZMT_QP02_REPORT
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmt_qp02_report.
+
+TYPES: BEGIN OF ty_data,
+         plnnr     TYPE plnnr,    " Číslo výrobního postupu
+         plnty     TYPE plnty,    " Typ výrobního postupu
+         plnkn     TYPE plnkn,    " Pořadové číslo operace
+         vornr     TYPE vornr,    " Číslo operace
+         merknr    TYPE qmerknrp, " Čís.atributu kontroly
+         verwmerkm TYPE qmerknr,  " Kmenový atribut kontroly
+         loekz     TYPE lkenz,
+       END OF   ty_data.
+
+DATA:lt_data TYPE TABLE OF ty_data,
+     lr_data TYPE REF TO   ty_data.
+
+DATA lt_mapl TYPE TABLE OF mapl.
+
+DATA lv_vornr TYPE vornr.
+
+DATA: lv_merknr TYPE qmerknrp.
+
+DATA lv_datum TYPE char10.
+
+DATA: lv_has_non_x TYPE abap_bool.
+
+lv_has_non_x = abap_false.
+
+lv_vornr = `10`.
+lv_merknr = `190`.
+
+lv_vornr = |{ lv_vornr ALPHA = IN }|.
+
+lv_datum = |{ sy-datum+6(2) }.{ sy-datum+4(2) }.{ sy-datum(4) }|.
+
+*CONCATENATE sy-datum+6(2) sy-datum+4(2) sy-datum+0(4) INTO lv_datum SEPARATED BY '.'.
+
+
+
+SELECT *
+  INTO TABLE lt_mapl
+  FROM mapl
+  WHERE matnr = `MTE_SMES_MYVAL`.
+
+IF lt_mapl[] IS NOT INITIAL.
+  SELECT plpo~plnnr,
+         plpo~plnty,
+         plpo~plnkn,
+         plpo~vornr,
+         plmk~merknr,
+         plmk~verwmerkm,
+         plmk~loekz
+    INTO TABLE @lt_data
+    FROM plpo
+    INNER JOIN plmk ON  plpo~plnnr = plmk~plnnr
+                    AND plpo~plnty = plmk~plnty
+                    AND plpo~plnkn = plmk~plnkn
+    FOR ALL ENTRIES IN @lt_mapl
+    WHERE plpo~plnnr = @lt_mapl-plnnr
+      AND plpo~plnty = @lt_mapl-plnty.
+
+
+  IF lv_vornr IS NOT INITIAL.
+    DELETE lt_data WHERE vornr <> lv_vornr.
+*    DELETE lt_data where merknr <> lv_merknr.
+  ENDIF.
+
+ENDIF.
+
+LOOP AT lt_data REFERENCE INTO lr_data.
+  IF lr_data->loekz <> 'X'.
+    lv_has_non_x = abap_true.
+    EXIT.
+  ENDIF.
+ENDLOOP.
+
+IF lv_has_non_x = abap_true.
+  LOOP AT lt_data REFERENCE INTO lr_data.
+    IF lr_data->merknr = lv_merknr.
+      lv_has_non_x = abap_false.
+      EXIT.
+    ENDIF.
+  ENDLOOP.
+ENDIF.
+
+IF lv_has_non_x = abap_false.
+  EXIT.
+ENDIF.
+
+
+"SYNTAX pro kód v LSMW -> QP02_ATR_ADD2
+
+*qp02_atr_add2-plmkb-qmtb_werks = struktura_12-plmkb-qmtb_werks.
+** Achtung: Quellfeld ist länger als Zielfeld!
+*
+*TYPES: BEGIN OF ty_data,
+*         plnnr     TYPE plnnr,  " Číslo výrobního postupu
+*         plnty     TYPE plnty,  " Typ výrobního postupu
+*         plnkn     TYPE plnkn,  " Pořadové číslo operace
+*         vornr     TYPE vornr,  " Číslo operace
+*         merknr    TYPE qmerknrp,
+*         verwmerkm TYPE qmerknr,
+*         loekz     TYPE lkenz,
+*
+*       END OF   ty_data.
+*
+*DATA: lt_data TYPE TABLE OF ty_data,
+*      lr_data TYPE ref to   ty_data.
+*
+*DATA lt_mapl TYPE TABLE OF mapl.
+*
+*DATA lv_vornr TYPE vornr.
+*
+*DATA lv_has_non_x TYPE abap_bool.
+*
+*lv_has_non_x = abap_false.
+*
+*lv_vornr = struktura_12-rc27h-vornr.
+*lv_vornr = |{ lv_vornr ALPHA = IN }|.
+*
+*
+*SELECT *
+*  INTO TABLE lt_mapl
+*  FROM mapl
+*  WHERE matnr = struktura_12-rc27m-matnr.
+*
+*IF lt_mapl[] IS NOT INITIAL.
+*  SELECT plpo~plnnr
+*         plpo~plnty
+*         plpo~plnkn
+*         plpo~vornr
+*         plmk~merknr
+*         plmk~verwmerkm
+*         plmk~loekz
+*    INTO TABLE lt_data
+*    FROM plpo
+*    INNER JOIN plmk ON  plpo~plnnr = plmk~plnnr
+*                    AND plpo~plnty = plmk~plnty
+*                    AND plpo~plnkn = plmk~plnkn
+*    FOR ALL ENTRIES IN lt_mapl
+*    WHERE plpo~plnnr = lt_mapl-plnnr
+*      AND plpo~plnty = lt_mapl-plnty.
+*
+*
+*  IF lv_vornr IS NOT INITIAL.
+**    DELETE lt_data WHERE vornr <> lv_vornr.
+*    DELETE lt_data WHERE vornr <> lv_vornr.
+*  ENDIF.
+*
+*ENDIF.
+*
+*LOOP AT lt_data REFERENCE INTO lr_data.
+*  IF lr_data->loekz <> 'X'.
+*    lv_has_non_x = abap_true.
+*    EXIT.
+*  ENDIF.
+*ENDLOOP.
+*
+*IF lv_has_non_x = abap_true.
+*  LOOP AT lt_data REFERENCE INTO lr_data.
+*    IF lr_data->merknr = STRUKTURA_12-PLMKB-MERKNR_02.
+*      lv_has_non_x = abap_false.
+*      EXIT.
+*    ENDIF.
+*  ENDLOOP.
+*ENDIF.
+*
+*IF lv_has_non_x = abap_false.
+*  EXIT.
+*ENDIF.

@@ -1,0 +1,74 @@
+*&---------------------------------------------------------------------*
+*&  Teleki Martin 24.07.2024 Sgenit #82880 DORMER PRAMET
+*&---------------------------------------------------------------------*
+
+*DATA: lr_caufvd TYPE REF TO   caufvd,
+*      lr_afrud  TYPE REF TO   afrud,
+*      lv_pspnr  TYPE          ps_intnr,
+*      lt_afvc   TYPE TABLE OF afvc,
+*      lv_index  TYPE          i.
+*
+*LOOP AT caufvd_tab REFERENCE INTO lr_caufvd.
+*
+*  LOOP AT afrud_tab REFERENCE INTO lr_afrud
+*   WHERE aufnr = lr_caufvd->aufnr.
+*
+*    CHECK sy-subrc = 0.
+*
+*    " zaverecne zphl
+*    CHECK lr_afrud->aueru = 'X'.
+*
+*    " nacteni operaci
+*    SELECT * FROM afvc INTO TABLE lt_afvc
+*      WHERE aufpl = lr_afrud->aufpl
+*      ORDER BY vornr.
+*
+*    " test nasledujici operace
+*    READ TABLE lt_afvc TRANSPORTING NO FIELDS
+*      WITH KEY vornr = lr_afrud->vornr.
+*    lv_index = sy-tabix + 1. " nasl. operace
+*
+*    TRY.
+*        DATA(lr_afvc) = REF #( lt_afvc[ lv_index ] ).
+*
+*        " nastav status
+*        DATA lv_objnr       TYPE jsto-objnr.
+*
+*        lv_objnr = |NV{ lr_afvc->aufpl }{ lr_afvc->aplzl }|.
+*
+*        CALL FUNCTION 'STATUS_CHANGE_EXTERN'
+*          EXPORTING
+*            objnr               = lv_objnr
+*            user_status         = 'E0010'
+*          EXCEPTIONS
+*            object_not_found    = 1
+*            status_inconsistent = 2
+*            status_not_allowed  = 3
+*            OTHERS              = 4.
+*
+*        CALL FUNCTION 'ZPS_CNF_EMAIL_NOTIF'
+*          EXPORTING
+*            iv_aufnr = lr_afrud->aufnr
+*            iv_vornr = lr_afvc->vornr
+*            iv_projn = lr_caufvd->projn.
+*
+*      CATCH cx_sy_itab_line_not_found.
+*        " dalsi operace neni, predani do CRM
+*        SELECT SINGLE psphi FROM prps INTO lv_pspnr
+*          WHERE pspnr = lr_caufvd->projn.
+*        CHECK sy-subrc = 0.
+*
+*        " predani do CRM
+*        CALL FUNCTION 'ZPS_CRM_UPDATE_CRM'
+*          EXPORTING
+*            iv_pspnr  = lv_pspnr
+*            is_caufvd = lr_caufvd->*
+*            is_afrud  = lr_afrud->*.
+*    ENDTRY.
+*
+*  ENDLOOP.
+*ENDLOOP.
+
+*&---------------------------------------------------------------------*
+*&  Teleki Martin 24.07.2024 Sgenit #82880 DORMER PRAMET
+*&---------------------------------------------------------------------*

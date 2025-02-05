@@ -1,0 +1,207 @@
+FUNCTION zps_cnf_email_notif.
+*"----------------------------------------------------------------------
+*"*"Lokální rozhraní:
+*"  IMPORTING
+*"     VALUE(IV_AUFNR) TYPE  AUFNR
+*"     VALUE(IV_VORNR) TYPE  VORNR
+*"     VALUE(IV_PROJN) TYPE  PS_PSP_PNR
+*"----------------------------------------------------------------------
+
+  TYPES: BEGIN OF t_para,
+           fieldname(60),
+           fieldvalue(255),
+         END OF t_para.
+
+  DATA: lv_username TYPE          syuname,
+        lv_emnam    TYPE          bas_check_pernr-name,
+        lv_adress   TYPE          bcs_address.
+
+  DATA: lr_send_request TYPE REF TO    cl_bcs,
+        lr_document     TYPE REF TO    cl_document_bcs,
+        lr_send         TYPE REF TO    if_sender_bcs,
+        lt_text         TYPE           soli_tab,
+        lr_receiver     TYPE REF TO    if_recipient_bcs,
+        lv_sent_to_all  TYPE           os_boolean,
+        lv_subject      TYPE           so_obj_des,
+        lv_temp_addr    TYPE           adr6-smtp_addr.
+
+  DATA: lv_shortcut_string TYPE string,
+        lv_shortcut_table  TYPE soli_tab,
+        lv_banfn           TYPE banfn,
+        lv_parameter       TYPE text255,
+        lt_shortcut_param  TYPE TABLE OF t_para,
+        ls_shortcut_param  TYPE t_para,
+        lv_shortcut_size   TYPE so_obj_len.
+
+  CONSTANTS: lc_person      VALUE 'P',
+             lc_transaction TYPE tcode VALUE 'ZCN47N'.
+
+  " kontrola paramertu
+  "&mib:PARAM-WIZARD: DO NOT CHANGE THE FOLLOWING LINE!
+  "&mib:PARAMETER (PS,NOTIF,MAIL_NEXT_ACT)
+*  CHECK /mibcon/cl_param=>check( iv_area = 'PS'
+*                             iv_process  = 'NOTIF'
+*                             iv_param    = 'MAIL_NEXT_ACT' ).
+
+  "Hledání BEDID
+  SELECT SINGLE bedid FROM afko INTO @DATA(lv_bedid)
+    WHERE aufnr = @iv_aufnr.
+
+  SELECT SINGLE pernr FROM kbed INTO @DATA(lv_pernr)
+    WHERE bedid = @lv_bedid
+    AND   vornr = @iv_vornr
+    AND   otype = @lc_person.
+
+  " Funkce pro získání jméno podle PERNR
+  CALL FUNCTION 'BP_CENTRALPERSON_GET'
+    EXPORTING
+      iv_employee_id      = lv_pernr
+    IMPORTING
+      ev_username         = lv_username
+    EXCEPTIONS
+      no_central_person   = 1
+      no_business_partner = 2
+      no_id               = 3
+      OTHERS              = 4.
+
+  IF sy-subrc <> 0.
+    " Implement suitable error handling here
+  ELSE.
+    SELECT SINGLE smtp_addr, name_text FROM p_user002 INTO ( @lv_adress, @lv_emnam )
+      WHERE bname = @lv_username.
+
+    SELECT SINGLE poski, posid FROM prps INTO (@DATA(lv_proj), @DATA(lv_posid))
+      WHERE pspnr = @iv_projn.
+
+    "Funkce pro odeslání emailu
+    IF lv_adress IS NOT INITIAL AND lv_emnam IS NOT INITIAL.
+*      lv_proj = `*`.
+      TRY.
+          " sending mail to outlook with sap link
+          lr_send_request = cl_bcs=>create_persistent( ).
+
+          APPEND |Hello { lv_emnam }.| TO lt_text.
+          APPEND |You could work on project { lv_proj } with order number { iv_aufnr ALPHA = OUT
+                         } operation number { iv_vornr }.| TO lt_text.
+          APPEND |Have a nice day. | TO lt_text.
+          APPEND `` TO lt_text.
+          APPEND |Ahoj { lv_emnam }.| TO lt_text.
+          APPEND |Mohl/a byste pracovat na projektu { lv_proj } s číslem zakázky { iv_aufnr ALPHA = OUT
+                         } a číslem operace { iv_vornr }.| TO lt_text.
+          APPEND |Přeji hezký den.| TO lt_text.
+          APPEND `` TO lt_text.
+          APPEND `------------` TO lt_text.
+
+          lv_subject = |{ lv_proj } { iv_aufnr ALPHA = OUT } { iv_vornr }|.
+
+          lr_document = cl_document_bcs=>create_document(
+            i_type    = 'RAW'
+            i_text    = lt_text
+            i_length  = '180'
+            i_subject = lv_subject ).
+
+*          ls_shortcut_param-fieldname = 'S_PROJ-LOW'.
+*          ls_shortcut_param-fieldvalue = `*` .
+*          APPEND ls_shortcut_param TO lt_shortcut_param.
+*          CLEAR ls_shortcut_param.
+*
+*          ls_shortcut_param-fieldname = 'S_POSID-LOW'.
+*          ls_shortcut_param-fieldvalue = lv_posid .
+*          APPEND ls_shortcut_param TO lt_shortcut_param.
+*          CLEAR ls_shortcut_param.
+*
+*          ls_shortcut_param-fieldname = 'S_AUFNR-LOW'.
+*          ls_shortcut_param-fieldvalue = iv_aufnr.
+*          APPEND ls_shortcut_param TO lt_shortcut_param.
+*          CLEAR ls_shortcut_param.
+*
+*          ls_shortcut_param-fieldname = 'S_ACT-LOW'.
+*          ls_shortcut_param-fieldvalue = iv_vornr.
+*          APPEND ls_shortcut_param TO lt_shortcut_param.
+*          CLEAR ls_shortcut_param.
+*
+*          CLEAR lv_parameter.
+*          LOOP AT lt_shortcut_param INTO ls_shortcut_param.
+*            CONCATENATE lv_parameter ls_shortcut_param-fieldname '='
+*            ls_shortcut_param-fieldvalue ';'
+*                      INTO lv_parameter.
+*          ENDLOOP.
+
+          lv_parameter = |S_PROJ-LOW=*;S_POSID-LOW={ lv_posid };S_AUFNR-LOW={ iv_aufnr };S_ACT-LOW={ iv_vornr }|.
+
+          "2) generate shortcut
+          CALL FUNCTION 'SWN_CREATE_SHORTCUT'
+            EXPORTING
+              i_transaction           = lc_transaction
+              i_parameter             = lv_parameter
+              i_sysid                 = sy-sysid
+              i_client                = sy-mandt
+              i_user                  = sy-uname
+              i_language              = sy-langu
+            IMPORTING
+              shortcut_string         = lv_shortcut_string
+              shortcut_table          = lv_shortcut_table
+            EXCEPTIONS
+              inconsistent_parameters = 1
+              OTHERS                  = 2.
+          IF sy-subrc <> 0.
+            " Implement suitable error handling here
+          ENDIF.
+
+          lv_shortcut_size = strlen( lv_shortcut_string ).
+
+          " Add Shorcut Attachment
+          lr_document->add_attachment(
+            EXPORTING
+              i_attachment_type    = 'SAP'   "extension for shortcut
+              i_attachment_subject = 'Open CN25.SAP'
+              i_attachment_size    = lv_shortcut_size
+              i_att_content_text   = lv_shortcut_table ).
+
+          "add document to send request
+          CALL METHOD lr_send_request->set_document( lr_document ).
+
+          "create internet address for the sender
+          lr_send = cl_cam_address_bcs=>create_internet_address(
+            i_address_string = 'dormerpramet@system.com'
+            i_address_name   = 'dormerpramet@system.com' ).
+
+          " set the sender to send request instance
+          CALL METHOD lr_send_request->set_sender
+            EXPORTING
+              i_sender = lr_send.
+
+          lv_temp_addr = lv_adress. "Receiving address
+          lr_receiver = cl_cam_address_bcs=>create_internet_address( lv_temp_addr ). "adding receipts
+
+          CALL METHOD lr_send_request->add_recipient
+            EXPORTING
+              i_recipient = lr_receiver
+              i_express   = 'X'.
+
+          lr_send_request->set_send_immediately('X').
+
+          TRY.
+              " sending the mail
+              CALL METHOD lr_send_request->send(
+                EXPORTING
+                  i_with_error_screen = 'X'
+                RECEIVING
+                  result              = lv_sent_to_all ).
+
+              COMMIT WORK.
+
+              IF lv_sent_to_all = 'X'.
+                MESSAGE `Zpráva byla úspěšně odeslána na email pracovníka.` TYPE `S`.
+              ENDIF.
+
+            CATCH cx_bcs_send.
+              MESSAGE `Zpráva nebyla odeslána na email pracovníka` TYPE `I`.
+          ENDTRY.
+
+        CATCH cx_bcs INTO DATA(lx_bcs_generic).
+          MESSAGE lx_bcs_generic->get_text( ) TYPE `I`.
+      ENDTRY.
+    ENDIF.
+  ENDIF.
+ENDFUNCTION.
